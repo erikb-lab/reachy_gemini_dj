@@ -163,9 +163,16 @@ class MusicPlayer:
             if "entries" in info:
                 info = info["entries"][0]
             stream_url = info.get("url")
+            headers = dict(info.get("http_headers") or {})
             title = info.get("title", query)
             artist = info.get("uploader", "")
             duration = float(info.get("duration", 0))
+
+        if not stream_url:
+            with self._lock:
+                self._error = "No stream URL found"
+                self._state = "idle"
+            return
 
         with self._lock:
             self._current_track = title
@@ -175,20 +182,38 @@ class MusicPlayer:
             self._elapsed_paused = 0.0
             self._state = "playing"
 
+            header_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items()) if headers else ""
             cmd = [
                 "ffplay",
                 "-nodisp",
                 "-autoexit",
                 "-loglevel",
-                "quiet",
+                "warning",
                 "-volume",
                 str(int(self._volume * self._duck_factor * 100)),
+            ]
+            if header_str:
+                cmd += ["-headers", header_str]
+            cmd += [
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
                 stream_url,
             ]
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log.info("Starting ffplay for %s (vol=%d)", title, int(self._volume * self._duck_factor * 100))
+            self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            proc = self._proc
 
-        if self._proc:
-            self._proc.wait()
+        if proc:
+            try:
+                _, err = proc.communicate()
+                if err and "error" in err.lower():
+                    log.warning("ffplay note: %s", err[:200])
+            except Exception:
+                pass
 
         with self._lock:
             self._proc = None

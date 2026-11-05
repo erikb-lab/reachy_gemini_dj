@@ -142,7 +142,8 @@ class Motion:
 
     def _submit(self, label: str, fn) -> None:
         if not self._enabled():
-            raise RuntimeError("Movement is turned off in the settings.")
+            log.debug("Movement is turned off in the settings; ignoring move: %s", label)
+            return
         item = (label, fn)
         try:
             self._q.put_nowait(item)

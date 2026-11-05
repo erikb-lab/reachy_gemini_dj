@@ -242,6 +242,10 @@ code{background:var(--bg);padding:2px 6px;border-radius:6px;font-size:13px}
         <button class="btn ghost" onclick="act('skip')">Skip</button>
         <button class="btn ghost" onclick="act('stop')">Stop</button>
       </div>
+      <div class="row" style="margin-top:14px">
+        <input type="text" id="track_q" placeholder="Play artist or track name..." class="grow" onkeydown="if(event.key==='Enter')playTrack()">
+        <button class="btn ghost" onclick="playTrack()">Queue</button>
+      </div>
       <div class="sl" style="margin-top:16px"><span>Volume</span><input type="range" id="music_volume" min="0" max="1" step="0.01"><output></output></div>
       <div id="merr" class="note bad hide" style="margin-top:10px"></div>
     </div>
@@ -406,6 +410,15 @@ function go(t){document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.t));
 
 const act = a => api('/api/music/'+a,{}).then(poll);
+function playTrack(){
+  const el=$('track_q'), q=el.value.trim();
+  if(!q) return;
+  api('/api/music/play',{query:q}).then(r=>{
+    el.value='';
+    toast(r.result||'Queued');
+    poll();
+  });
+}
 const newConv = () => api('/api/new_conversation',{}).then(()=>toast('Fresh conversation started'));
 function toggleMute(){api('/api/mute',{muted:!muted}).then(poll)}
 function saveKey(){const v=$('key').value.trim(); if(!v)return toast('Paste a key first');

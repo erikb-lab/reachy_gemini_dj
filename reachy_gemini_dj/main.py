@@ -200,6 +200,13 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {"ok": True}
 
         # Music endpoints
+        class MusicPlayRequest(BaseModel):
+            query: str
+
+        @app.post("/api/music/play")
+        def music_play(req: MusicPlayRequest):
+            return self.music.play(req.query)
+
         @app.post("/api/music/pause")
         def music_pause():
             return self.music.pause()
@@ -303,7 +310,10 @@ class ReachyGeminiDJ(ReachyMiniApp):
             if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing:
                 time.sleep(12.0)
                 if not self.motion.busy and not stop_event.is_set():
-                    self.motion.move_head("front")
+                    try:
+                        self.motion.move_head("front")
+                    except Exception as e:
+                        log.debug("Expressive idle move note: %s", e)
             else:
                 time.sleep(1.0)
 
