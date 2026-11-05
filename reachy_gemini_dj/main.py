@@ -142,7 +142,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.2.2",
+                "version": "0.3.0",
                 "gemini": g_state,
                 "model": self.config.model,
                 "error": g_err,
@@ -280,7 +280,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {"ok": True}
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.2.2...")
+        log.info("Starting Reachy Gemini DJ v0.3.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot
