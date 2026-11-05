@@ -18,7 +18,7 @@ A voice-powered AI DJ and tabletop assistant for the [Pollen Robotics Reachy Min
 - **Smart Music DJ**: Music streaming with automatic audio ducking during conversation, responsive playback controls, and volume tuning.
 - **Built-in Robot Motion**: Expressive head gestures, emotions, and dances from Pollen's official motion libraries.
 - **Google Workspace**: Direct access to your Google Calendar, Google Tasks, and Gmail (read-only) via local PKCE OAuth.
-- **Mobile-Friendly Web Dashboard**: Clean control room at `http://reachy-mini.local:8042` with setup checklists, motion pads, Google OAuth wizard, and sound sliders.
+- **Responsive Dashboard UI**: Fully scaling, mobile & desktop-friendly control room at `http://reachy-mini.local:8042`.
 
 ---
 

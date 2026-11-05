@@ -8,167 +8,303 @@
 :root{
   --bg:#f4f5fb; --card:#fff; --ink:#1b1d2a; --mut:#6b7087; --line:#e4e6f0;
   --accent:#6c5ce7; --accent2:#00b8d9; --ok:#1fa971; --warn:#e8a317; --bad:#e5484d; --soft:#efedff;
-  --shadow:0 1px 2px rgba(20,20,50,.05),0 8px 24px rgba(20,20,50,.06);
+  --shadow:0 1px 3px rgba(20,20,50,.06),0 10px 28px rgba(20,20,50,.08);
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#0f1117; --card:#181b26; --ink:#eceef7; --mut:#9096b0; --line:#272b3b; --soft:#232040;
-  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.35);
+  --shadow:0 2px 6px rgba(0,0,0,.45),0 12px 32px rgba(0,0,0,.4);
 }}
 *{box-sizing:border-box} html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{background:linear-gradient(120deg,var(--accent),var(--accent2));color:#fff;padding:18px 16px 56px}
-.wrap{max-width:860px;margin:0 auto;padding:0 14px}
-.top{display:flex;align-items:center;gap:12px;max-width:860px;margin:0 auto}
-.logo{font-size:30px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}
-.top h1{margin:0;font-size:20px;letter-spacing:.2px}.top small{opacity:.85}
-.pill{margin-left:auto;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.18);padding:6px 12px;border-radius:999px;font-size:13px;white-space:nowrap}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+
+/* Header & Nav in single clean flow - NO negative margins */
+header{
+  background:linear-gradient(120deg,var(--accent),var(--accent2));
+  color:#fff;
+  padding:20px 0 16px;
+  box-shadow:0 4px 18px rgba(0,0,0,.15);
+}
+.wrap{
+  max-width:1240px;
+  width:calc(100% - 36px);
+  margin:0 auto;
+}
+.top{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-bottom:18px;
+}
+.logo{font-size:32px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}
+.top h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.2px}
+.top small{opacity:.85;font-size:13px;font-weight:500}
+.pill{
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  background:rgba(255,255,255,.2);
+  backdrop-filter:blur(6px);
+  padding:6px 14px;
+  border-radius:999px;
+  font-size:13px;
+  white-space:nowrap;
+}
 .dot{width:9px;height:9px;border-radius:50%;background:#bbb}
 .dot.ok{background:#4cf0a8;box-shadow:0 0 8px #4cf0a8}.dot.warn{background:#ffd166}.dot.bad{background:#ff7b7b}
-main{margin-top:-40px;padding-bottom:60px}
-nav{display:flex;gap:6px;overflow-x:auto;padding:0 14px 12px;max-width:860px;margin:-34px auto 0;scrollbar-width:none}
+
+nav{
+  display:flex;
+  gap:8px;
+  overflow-x:auto;
+  scrollbar-width:none;
+  padding-bottom:2px;
+}
 nav::-webkit-scrollbar{display:none}
-nav button{flex:0 0 auto;border:0;background:rgba(255,255,255,.2);color:#fff;padding:8px 15px;border-radius:999px;font:inherit;font-weight:600;cursor:pointer}
-nav button.on{background:#fff;color:var(--accent)}
-.card{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:16px;margin-bottom:14px}
-.card h2{margin:0 0 4px;font-size:16px}.card p.sub{margin:0 0 12px;color:var(--mut);font-size:13px}
+nav button{
+  flex:0 0 auto;
+  border:0;
+  background:rgba(255,255,255,.18);
+  color:#fff;
+  padding:9px 18px;
+  border-radius:999px;
+  font:inherit;
+  font-size:14px;
+  font-weight:600;
+  cursor:pointer;
+  transition:all .18s ease;
+}
+nav button:hover{background:rgba(255,255,255,.3)}
+nav button.on{
+  background:#fff;
+  color:var(--accent);
+  box-shadow:0 2px 10px rgba(0,0,0,.18);
+}
+
+/* Main Content Area */
+main{
+  padding:26px 0 60px;
+}
 .tab{display:none}.tab.on{display:block}
+
+/* Responsive Grid for large screens */
+.grid-2{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:16px;
+  align-items:start;
+}
+@media (min-width:768px){
+  .grid-2{grid-template-columns:repeat(2,1fr)}
+  .grid-full{grid-column:1 / -1}
+}
+
+.card{
+  background:var(--card);
+  border-radius:18px;
+  box-shadow:var(--shadow);
+  padding:20px;
+  margin-bottom:16px;
+  border:1px solid var(--line);
+}
+.card h2{margin:0 0 6px;font-size:17px;font-weight:700}
+.card p.sub{margin:0 0 14px;color:var(--mut);font-size:13.5px}
+
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>.grow{flex:1;min-width:140px}
-label{display:block;font-size:12px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin:12px 0 5px}
-input[type=text],input[type=password],select,textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
-textarea{min-height:72px;resize:vertical}
-input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
-button.btn{border:0;background:var(--accent);color:#fff;padding:10px 16px;border-radius:10px;font:inherit;font-weight:600;cursor:pointer}
-button.btn.ghost{background:var(--soft);color:var(--accent)}button.btn.danger{background:var(--bad)}
-button.btn:active{transform:scale(.97)}button.btn:disabled{opacity:.5}
+label{display:block;font-size:12px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;margin:14px 0 6px}
+input[type=text],input[type=password],select,textarea{
+  width:100%;
+  padding:11px 14px;
+  border:1px solid var(--line);
+  border-radius:11px;
+  background:var(--bg);
+  color:var(--ink);
+  font:inherit;
+  transition:border-color .15s;
+}
+textarea{min-height:80px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
+
+button.btn{
+  border:0;
+  background:var(--accent);
+  color:#fff;
+  padding:10px 18px;
+  border-radius:10px;
+  font:inherit;
+  font-weight:600;
+  cursor:pointer;
+  transition:all .15s;
+}
+button.btn.ghost{background:var(--soft);color:var(--accent)}
+button.btn.danger{background:var(--bad);color:#fff}
+button.btn:hover{filter:brightness(1.08)}
+button.btn:active{transform:scale(.97)}
+button.btn:disabled{opacity:.5}
+
 .chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:8px 13px;border-radius:999px;cursor:pointer;font:inherit}
-.chip:active{background:var(--soft)}
+.chip{
+  border:1px solid var(--line);
+  background:var(--bg);
+  color:var(--ink);
+  padding:8px 14px;
+  border-radius:999px;
+  cursor:pointer;
+  font:inherit;
+  font-size:13.5px;
+  transition:all .15s;
+}
+.chip:hover{background:var(--soft);border-color:var(--accent)}
+.chip:active{transform:scale(.97)}
+
 .steps{counter-reset:s;list-style:none;margin:0;padding:0}
-.steps li{counter-increment:s;display:flex;gap:12px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line)}
+.steps li{counter-increment:s;display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
 .steps li:last-child{border:0}
-.steps li::before{content:counter(s);flex:0 0 26px;height:26px;border-radius:50%;background:var(--soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:13px}
+.steps li::before{content:counter(s);flex:0 0 28px;height:28px;border-radius:50%;background:var(--soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:13px}
 .steps li.done::before{content:"\2713";background:var(--ok);color:#fff}
 .steps li.done{color:var(--mut)}
-.np{display:flex;gap:14px;align-items:center}
-.disc{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-size:26px;color:#fff;flex:0 0 56px}
-.np .t{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.np .a{color:var(--mut);font-size:13px}
-.bar{height:5px;background:var(--line);border-radius:5px;overflow:hidden;margin-top:8px}.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .6s linear}
-.ctl{display:flex;gap:8px;margin-top:12px}.ctl button{flex:1}
+
+.np{display:flex;gap:16px;align-items:center}
+.disc{width:60px;height:60px;border-radius:16px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-size:28px;color:#fff;flex:0 0 60px}
+.np .t{font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.np .a{color:var(--mut);font-size:13.5px}
+.bar{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:12px}.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .6s linear}
+.ctl{display:flex;gap:8px;margin-top:14px}.ctl button{flex:1}
 .meter{height:8px;background:var(--line);border-radius:8px;overflow:hidden}.meter>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok),var(--warn));transition:width .12s}
-.bubble{padding:9px 12px;border-radius:14px;margin:6px 0;max-width:92%;font-size:14px;min-height:20px}
+.bubble{padding:10px 14px;border-radius:14px;margin:8px 0;max-width:92%;font-size:14px;min-height:22px}
 .bubble.u{background:var(--soft);margin-left:auto}.bubble.r{background:var(--bg);border:1px solid var(--line)}
 .bubble:empty::before{content:"\2026";color:var(--mut)}
-.feed{max-height:210px;overflow:auto;font-size:13px}.feed div{padding:5px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
-.feed time{color:var(--mut);flex:0 0 62px}.feed .error{color:var(--bad)}
-.sl{display:flex;align-items:center;gap:12px}.sl input[type=range]{flex:1;accent-color:var(--accent)}.sl output{width:46px;text-align:right;color:var(--mut);font-variant-numeric:tabular-nums}
-.sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+
+.feed{max-height:240px;overflow:auto;font-size:13px}.feed div{padding:6px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
+.feed time{color:var(--mut);flex:0 0 64px}.feed .error{color:var(--bad)}
+
+.sl{display:flex;align-items:center;gap:12px;margin:6px 0 10px}.sl input[type=range]{flex:1;accent-color:var(--accent)}.sl output{width:50px;text-align:right;color:var(--mut);font-variant-numeric:tabular-nums;font-weight:600}
+.sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
 .sw:last-child{border:0}.sw b{display:block}.sw span{color:var(--mut);font-size:13px}
-.sw input{appearance:none;width:46px;height:27px;border-radius:99px;background:var(--line);position:relative;cursor:pointer;flex:0 0 46px;transition:.2s}
-.sw input::after{content:"";position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
-.sw input:checked{background:var(--accent)}.sw input:checked::after{left:22px}
-.pad{display:grid;grid-template-columns:repeat(3,64px);grid-template-rows:repeat(3,52px);gap:8px;justify-content:center;margin:6px 0}
-.pad button{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:12px;font-size:20px;cursor:pointer}
+.sw input{appearance:none;width:48px;height:28px;border-radius:99px;background:var(--line);position:relative;cursor:pointer;flex:0 0 48px;transition:.2s}
+.sw input::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sw input:checked{background:var(--accent)}.sw input:checked::after{left:23px}
+
+.pad{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,56px);gap:10px;justify-content:center;margin:10px 0}
+.pad button{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:14px;font-size:22px;cursor:pointer;transition:all .15s}
+.pad button:hover{background:var(--soft);border-color:var(--accent)}
 .pad .u{grid-column:2}.pad .l{grid-row:2;grid-column:1}.pad .f{grid-row:2;grid-column:2}.pad .r{grid-row:2;grid-column:3}.pad .d{grid-row:3;grid-column:2}
-.note{background:var(--soft);border-radius:12px;padding:10px 12px;font-size:13px;color:var(--ink)}
-.note.bad{background:rgba(229,72,77,.12)}.note.ok{background:rgba(31,169,113,.14)}
-a{color:var(--accent)} code{background:var(--bg);padding:1px 6px;border-radius:6px;font-size:13px}
-#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(80px);background:#222;color:#fff;padding:10px 16px;border-radius:12px;opacity:0;transition:.25s;z-index:9;max-width:90%}
+
+.note{background:var(--soft);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink)}
+.note.bad{background:rgba(229,72,77,.14);color:#ff8589}.note.ok{background:rgba(31,169,113,.16);color:#4cf0a8}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+code{background:var(--bg);padding:2px 6px;border-radius:6px;font-size:13px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(90px);background:#222;color:#fff;padding:11px 20px;border-radius:12px;opacity:0;transition:.25s;z-index:99;max-width:90%;box-shadow:0 8px 24px rgba(0,0,0,.4)}
 #toast.on{transform:translateX(-50%);opacity:1}
 .hide{display:none!important}
 </style>
 </head>
 <body>
 <header>
-  <div class="top">
-    <div class="logo">&#129302;</div>
-    <div><h1>Reachy Gemini DJ</h1><small id="ver">&nbsp;</small></div>
-    <div class="pill"><span class="dot" id="gdot"></span><span id="gstate">connecting&hellip;</span></div>
+  <div class="wrap">
+    <div class="top">
+      <div class="logo">&#129302;</div>
+      <div><h1>Reachy Gemini DJ</h1><small id="ver">&nbsp;</small></div>
+      <div class="pill"><span class="dot" id="gdot"></span><span id="gstate">connecting&hellip;</span></div>
+    </div>
+    <nav id="nav">
+      <button data-t="home" class="on">Home</button>
+      <button data-t="voice">Voice &amp; audio</button>
+      <button data-t="google">Google</button>
+      <button data-t="robot">Robot</button>
+      <button data-t="adv">Advanced</button>
+    </nav>
   </div>
 </header>
-<nav id="nav">
-  <button data-t="home" class="on">Home</button>
-  <button data-t="voice">Voice &amp; audio</button>
-  <button data-t="google">Google</button>
-  <button data-t="robot">Robot</button>
-  <button data-t="adv">Advanced</button>
-</nav>
+
 <main><div class="wrap">
 
-<!-- HOME -->
+<!-- HOME TAB -->
 <section class="tab on" id="t-home">
   <div class="card" id="setup">
-    <h2>Get started</h2><p class="sub">Three quick steps. You can do the last one later.</p>
+    <h2>Get started</h2><p class="sub">Three quick steps to kick things off. You can connect Google anytime later.</p>
     <ol class="steps">
       <li id="s1"><div><b>Add your Gemini API key</b><br><span class="sub">Free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>, then paste it under <a href="#" onclick="go('voice');return false">Voice &amp; audio</a>.</span></div></li>
-      <li id="s2"><div><b>Say &ldquo;play some jazz&rdquo;</b><br><span class="sub">Reachy listens all the time. No wake word, just talk.</span></div></li>
-      <li id="s3"><div><b>Connect Google (optional)</b><br><span class="sub">Calendar, Tasks and Gmail. <a href="#" onclick="go('google');return false">Set it up</a></span></div></li>
+      <li id="s2"><div><b>Say &ldquo;play some jazz&rdquo;</b><br><span class="sub">Reachy listens continuously. No wake word needed, just speak naturally.</span></div></li>
+      <li id="s3"><div><b>Connect Google (optional)</b><br><span class="sub">Access Calendar, Tasks, and unread Gmail. <a href="#" onclick="go('google');return false">Set it up</a></span></div></li>
     </ol>
   </div>
 
-  <div class="card">
-    <h2>Now playing</h2>
-    <div class="np"><div class="disc">&#9835;</div>
-      <div style="min-width:0"><div class="t" id="trk">Nothing playing</div><div class="a" id="art">Ask Reachy for some music</div></div></div>
-    <div class="bar"><i id="prog"></i></div>
-    <div class="ctl">
-      <button class="btn ghost" onclick="act('pause')">Pause</button>
-      <button class="btn ghost" onclick="act('resume')">Play</button>
-      <button class="btn ghost" onclick="act('skip')">Skip</button>
-      <button class="btn ghost" onclick="act('stop')">Stop</button>
+  <div class="grid-2">
+    <div class="card">
+      <h2>Now playing</h2>
+      <div class="np"><div class="disc">&#9835;</div>
+        <div style="min-width:0"><div class="t" id="trk">Nothing playing</div><div class="a" id="art">Ask Reachy for some music</div></div></div>
+      <div class="bar"><i id="prog"></i></div>
+      <div class="ctl">
+        <button class="btn ghost" onclick="act('pause')">Pause</button>
+        <button class="btn ghost" onclick="act('resume')">Play</button>
+        <button class="btn ghost" onclick="act('skip')">Skip</button>
+        <button class="btn ghost" onclick="act('stop')">Stop</button>
+      </div>
+      <div class="sl" style="margin-top:16px"><span>Volume</span><input type="range" id="music_volume" min="0" max="1" step="0.01"><output></output></div>
+      <div id="merr" class="note bad hide" style="margin-top:10px"></div>
     </div>
-    <div class="sl" style="margin-top:14px"><span>Volume</span><input type="range" id="music_volume" min="0" max="1" step="0.01"><output></output></div>
-    <div id="merr" class="note bad hide" style="margin-top:10px"></div>
-  </div>
 
-  <div class="card">
-    <div class="row"><h2 class="grow">Conversation</h2>
-      <button class="btn ghost" id="mutebtn" onclick="toggleMute()">Mute mic</button></div>
-    <div class="meter" style="margin:8px 0 10px"><i id="lvl"></i></div>
-    <div class="bubble u" id="heard"></div>
-    <div class="bubble r" id="said"></div>
-  </div>
+    <div class="card">
+      <div class="row"><h2 class="grow">Conversation</h2>
+        <button class="btn ghost" id="mutebtn" onclick="toggleMute()">Mute mic</button></div>
+      <div class="meter" style="margin:10px 0 12px"><i id="lvl"></i></div>
+      <div class="bubble u" id="heard"></div>
+      <div class="bubble r" id="said"></div>
+    </div>
 
-  <div class="card"><h2>Activity</h2><p class="sub">What Reachy just did for you.</p>
-    <div class="feed" id="feed"><span class="sub">Nothing yet.</span></div></div>
+    <div class="card grid-full">
+      <h2>Activity</h2><p class="sub">Recent actions and status updates.</p>
+      <div class="feed" id="feed"><span class="sub">Nothing yet.</span></div>
+    </div>
+  </div>
 </section>
 
-<!-- VOICE -->
+<!-- VOICE TAB -->
 <section class="tab" id="t-voice">
-  <div class="card"><h2>Gemini</h2>
-    <label for="key">API key <span id="keystate" style="text-transform:none;font-weight:400"></span></label>
-    <div class="row"><input class="grow" type="password" id="key" placeholder="Paste your key (it is stored on the robot only)" autocomplete="off">
-      <button class="btn" onclick="saveKey()">Save key</button></div>
-    <label for="voice">Voice</label><select id="voice"></select>
-    <label for="extra_instructions">About you (optional)</label>
-    <textarea id="extra_instructions" placeholder="e.g. Call me Sam. I like lo-fi when I work."></textarea>
-    <div class="row" style="margin-top:10px"><button class="btn ghost" onclick="saveText()">Save</button></div>
-  </div>
-  <div class="card"><h2>Sound</h2>
-    <label>Duck level <span style="text-transform:none;font-weight:400">music volume while someone talks</span></label>
-    <div class="sl"><input type="range" id="duck_level" min="0" max="1" step="0.01"><output></output></div>
-    <label>Reachy voice loudness</label>
-    <div class="sl"><input type="range" id="voice_gain" min="0.2" max="1.5" step="0.05"><output></output></div>
-    <label>Echo guard <span style="text-transform:none;font-weight:400">raise if music or Reachy interrupts itself, lower if it ignores you over music</span></label>
-    <div class="sl"><input type="range" id="echo_guard" min="0.5" max="5" step="0.1"><output></output></div>
-  </div>
-  <div class="card">
-    <div class="sw"><div><b>Google Search</b><span>Lets Reachy look up news, weather and facts.</span></div><input type="checkbox" id="web_search"></div>
+  <div class="grid-2">
+    <div class="card">
+      <h2>Gemini Settings</h2>
+      <label for="key">API key <span id="keystate" style="text-transform:none;font-weight:400"></span></label>
+      <div class="row"><input class="grow" type="password" id="key" placeholder="Paste your key (stored locally on the robot)" autocomplete="off">
+        <button class="btn" onclick="saveKey()">Save key</button></div>
+      <label for="voice">Voice</label><select id="voice"></select>
+      <label for="extra_instructions">About you (optional)</label>
+      <textarea id="extra_instructions" placeholder="e.g. Call me Sam. I like lo-fi when I work."></textarea>
+      <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="saveText()">Save instructions</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Sound &amp; Interaction</h2>
+      <label>Duck level <span style="text-transform:none;font-weight:400">&mdash; music volume while someone talks</span></label>
+      <div class="sl"><input type="range" id="duck_level" min="0" max="1" step="0.01"><output></output></div>
+      <label>Reachy voice loudness</label>
+      <div class="sl"><input type="range" id="voice_gain" min="0.2" max="1.5" step="0.05"><output></output></div>
+      <label>Echo guard <span style="text-transform:none;font-weight:400">&mdash; raise if music interrupts Reachy, lower if it ignores you</span></label>
+      <div class="sl"><input type="range" id="echo_guard" min="0.5" max="5" step="0.1"><output></output></div>
+
+      <div class="sw" style="margin-top:16px">
+        <div><b>Google Search Grounding</b><span>Lets Reachy browse real-time web facts, news, and weather.</span></div>
+        <input type="checkbox" id="web_search">
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- GOOGLE -->
+<!-- GOOGLE TAB -->
 <section class="tab" id="t-google">
   <div class="card" id="g-on">
-    <h2>Google connected</h2><p class="sub" id="g-who"></p>
-    <div class="chips" id="g-svcs" style="margin-bottom:12px"></div>
-    <div id="g-reconnect" class="note bad hide" style="margin-bottom:12px">Google sign-in expired. Connect again below.</div>
-    <p class="sub">Try: &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo;, &ldquo;Add dentist Friday at 3&rdquo;, &ldquo;Add milk to my tasks&rdquo;, &ldquo;Any new email?&rdquo;</p>
-    <button class="btn danger" onclick="gDisconnect()">Disconnect</button>
+    <h2>Google Connected</h2><p class="sub" id="g-who"></p>
+    <div class="chips" id="g-svcs" style="margin-bottom:14px"></div>
+    <div id="g-reconnect" class="note bad hide" style="margin-bottom:14px">Google sign-in expired. Connect again below.</div>
+    <p class="sub">Try asking: &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo;, &ldquo;Add dentist Friday at 3&rdquo;, &ldquo;Add milk to my tasks&rdquo;, &ldquo;Check my email&rdquo;</p>
+    <button class="btn danger" onclick="gDisconnect()">Disconnect Google</button>
   </div>
 
   <div class="card" id="g-setup">
-    <h2>Connect your Google account</h2>
-    <p class="sub">Uses your own free Google sign-in, so nothing goes through anyone else. About 5 minutes, once.</p>
+    <h2>Connect your Google Account</h2>
+    <p class="sub">Uses your own free Google Desktop App OAuth client. Takes about 5 minutes once.</p>
     <ol class="steps">
       <li><div>Open <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer">Google Cloud &rarr; Clients</a>, make a project, then <b>Create client</b> &rarr; type <b>Desktop app</b>. Enable the Calendar, Tasks and Gmail APIs under <b>APIs &amp; Services</b> if you want those.</div></li>
       <li><div>On the <b>Audience</b> page add your own Google address as a test user, or press <b>Publish app</b> so the sign-in does not expire after 7 days.</div></li>
@@ -176,43 +312,79 @@ a{color:var(--accent)} code{background:var(--bg);padding:1px 6px;border-radius:6
         <input type="text" id="gid" placeholder="Client ID" style="margin-top:8px" autocomplete="off">
         <input type="password" id="gsec" placeholder="Client secret" style="margin-top:8px" autocomplete="off">
         <div id="g-saved" class="sub hide" style="margin-top:6px"></div></div></li>
-      <li><div>Choose what Reachy may use:
+      <li><div>Choose what Reachy may access:
         <div id="g-pick" class="chips" style="margin-top:8px"></div></div></li>
       <li><div><button class="btn" onclick="gStart()">Connect Google</button>
-        <div class="sub" style="margin-top:6px">A Google tab opens. Approve it. The next page will say it cannot be reached, that is expected.</div></div></li>
-      <li><div>Copy the <b>whole address</b> from that page&rsquo;s address bar and paste it here:
+        <div class="sub" style="margin-top:6px">A Google authorization tab will open. Approve it. The next page will say it cannot be reached (that is expected!).</div></div></li>
+      <li><div>Copy the <b>entire URL</b> from that browser address bar and paste it here:
         <input type="text" id="gurl" placeholder="http://localhost:8765/?state=...&code=..." style="margin-top:8px" autocomplete="off">
-        <div style="margin-top:8px"><button class="btn" onclick="gFinish()">Finish</button></div></div></li>
+        <div style="margin-top:10px"><button class="btn" onclick="gFinish()">Finish Connection</button></div></div></li>
     </ol>
     <div id="g-err" class="note bad hide"></div>
-    <p class="sub" style="margin-top:10px">Gmail is read only. Reachy can add calendar events and tasks but never deletes anything.</p>
+    <p class="sub" style="margin-top:12px">Gmail access is strictly read-only. Reachy can add calendar events and tasks, but never deletes anything.</p>
   </div>
 </section>
 
-<!-- ROBOT -->
+<!-- ROBOT TAB -->
 <section class="tab" id="t-robot">
-  <div class="card">
-    <div class="sw"><div><b>Let Reachy move</b><span>Built-in head moves, emotions and dances only.</span></div><input type="checkbox" id="motion_enabled"></div>
-    <div class="sw"><div><b>Be expressive</b><span>Reachy adds small reactions on its own while chatting.</span></div><input type="checkbox" id="expressive"></div>
-    <div id="mo-note" class="note hide" style="margin-top:10px"></div>
+  <div class="grid-2">
+    <div class="card">
+      <h2>Movement Controls</h2>
+      <div class="sw"><div><b>Enable Robot Movement</b><span>Allow built-in head moves, emotions, and dances.</span></div><input type="checkbox" id="motion_enabled"></div>
+      <div class="sw"><div><b>Be Expressive</b><span>Reachy automatically adds subtle head gestures while chatting.</span></div><input type="checkbox" id="expressive"></div>
+      <div id="mo-note" class="note hide" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Look Around</h2>
+      <p class="sub">Direct manual head steering.</p>
+      <div class="pad">
+        <button class="u" onclick="mv('head','up')">&#9650;</button>
+        <button class="l" onclick="mv('head','left')">&#9664;</button>
+        <button class="f" onclick="mv('head','front')">&#9679;</button>
+        <button class="r" onclick="mv('head','right')">&#9654;</button>
+        <button class="d" onclick="mv('head','down')">&#9660;</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Try an Emotion</h2>
+      <p class="sub">Pollen's official emotion move library.</p>
+      <div class="chips" id="emos"></div>
+    </div>
+
+    <div class="card">
+      <h2>Dance Routines</h2>
+      <p class="sub">Built-in rhythmic dance sequences.</p>
+      <div class="chips" id="dances">
+        <button class="chip" onclick="mv('dance','')">&#127922; Surprise me</button>
+      </div>
+    </div>
   </div>
-  <div class="card"><h2>Try an emotion</h2><div class="chips" id="emos"></div></div>
-  <div class="card"><h2>Look around</h2>
-    <div class="pad"><button class="u" onclick="mv('head','up')">&#9650;</button><button class="l" onclick="mv('head','left')">&#9664;</button>
-      <button class="f" onclick="mv('head','front')">&#9679;</button><button class="r" onclick="mv('head','right')">&#9654;</button>
-      <button class="d" onclick="mv('head','down')">&#9660;</button></div></div>
-  <div class="card"><h2>Dance</h2><p class="sub">The built-in dance library.</p>
-    <div class="chips" id="dances"><button class="chip" onclick="mv('dance','')">&#127922; Surprise me</button></div></div>
 </section>
 
-<!-- ADVANCED -->
+<!-- ADVANCED TAB -->
 <section class="tab" id="t-adv">
-  <div class="card"><h2>Gemini model</h2><p class="sub">Leave this alone unless Google retires the model. Reachy finds a working one by itself.</p>
-    <input type="text" id="model" autocomplete="off"><div class="row" style="margin-top:10px"><button class="btn ghost" onclick="saveText()">Save</button></div>
-    <p class="sub" id="curmodel" style="margin-top:8px"></p></div>
-  <div class="card"><h2>Conversation</h2>
-    <button class="btn ghost" onclick="newConv()">Start a fresh conversation</button></div>
-  <div class="card"><h2>Status</h2><div id="diag" class="sub"></div></div>
+  <div class="grid-2">
+    <div class="card">
+      <h2>Gemini Model Configuration</h2>
+      <p class="sub">Leave this default unless Google retires the model. Reachy automatically falls back if needed.</p>
+      <input type="text" id="model" autocomplete="off">
+      <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="saveText()">Save model</button></div>
+      <p class="sub" id="curmodel" style="margin-top:10px"></p>
+    </div>
+
+    <div class="card">
+      <h2>Session Controls</h2>
+      <p class="sub">Reset active dialogue context if Gemini gets stuck.</p>
+      <button class="btn ghost" onclick="newConv()">Start fresh conversation</button>
+    </div>
+
+    <div class="card grid-full">
+      <h2>System Diagnostics</h2>
+      <div id="diag" class="sub" style="font-family:monospace;font-size:13px;line-height:1.6"></div>
+    </div>
+  </div>
 </section>
 
 </div></main>
@@ -232,7 +404,6 @@ function go(t){document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('
   if(t==='robot')loadMoves(); window.scrollTo({top:0,behavior:'smooth'})}
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.t));
 
-const mmss = s => Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const act = a => api('/api/music/'+a,{}).then(poll);
 const newConv = () => api('/api/new_conversation',{}).then(()=>toast('Fresh conversation started'));
 function toggleMute(){api('/api/mute',{muted:!muted}).then(poll)}
