@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy_gemini_dj"
+version = "0.2.0"
+description = "Expressive Gemini Live Voice DJ with built-in dances, Google Workspace tools, and web UI for Reachy Mini."
+authors = [{ name = "sillymastermind" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "reachy-mini>=0.1.0",
+    "google-genai>=0.1.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "pydantic>=2.0.0",
+    "yt-dlp>=2024.0.0",
+    "numpy",
+]
+
+[project.entry-points."reachy_mini_apps"]
+reachy_gemini_dj = "reachy_gemini_dj.main:ReachyGeminiDJ"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["reachy_gemini_dj*"]
