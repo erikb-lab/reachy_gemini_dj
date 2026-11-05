@@ -229,14 +229,20 @@ class GeminiSession:
 
             # Motion
             elif name == "robot_emotion":
-                res = self.motion.emotion(args.get("emotion", "random"))
-                return {"result": f"Expressed emotion: {res}"}
+                if self.motion:
+                    res = self.motion.emotion(args.get("emotion", "random"))
+                    return {"result": f"Expressed emotion: {res}"}
+                return {"error": "Robot motion not ready yet"}
             elif name == "robot_dance":
-                res = self.motion.dance(args.get("dance", ""))
-                return {"result": f"Dancing: {res}"}
+                if self.motion:
+                    res = self.motion.dance(args.get("dance", ""))
+                    return {"result": f"Dancing: {res}"}
+                return {"error": "Robot motion not ready yet"}
             elif name == "robot_look":
-                res = self.motion.move_head(args.get("direction", "front"))
-                return {"result": res}
+                if self.motion:
+                    res = self.motion.move_head(args.get("direction", "front"))
+                    return {"result": res}
+                return {"error": "Robot motion not ready yet"}
 
             # Google
             elif name == "calendar_events":

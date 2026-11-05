@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
@@ -81,50 +81,54 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.said_text = ""
         self.mic_level = 0.0
 
+        # Subsystems initialized at startup
+        self.music = MusicPlayer(volume=self.config.music_volume)
+        self.motion: Motion | None = None
+        self.gemini_session: GeminiSession | None = None
+        self.audio_pipe: AudioPipeline | None = None
+
+        # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
+        self._setup_routes()
+
     def record_event(self, kind: str, text: str) -> None:
         t = datetime.datetime.now().strftime("%H:%M:%S")
         self.events.appendleft({"t": t, "kind": kind, "text": text})
 
-    def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.2.0...")
-        self.record_event("info", "Reachy Gemini DJ starting")
-
-        # Initialize Motion & Music subsystems
-        motion = Motion(
-            mini=reachy_mini,
-            stop=stop_event,
-            enabled=lambda: self.config.motion_enabled,
-        )
-        music = MusicPlayer(volume=self.config.music_volume)
-
-        # Initialize Gemini & Audio
-        gemini_session = GeminiSession(
-            config=self.config,
-            music=music,
-            motion=motion,
-            google_account=self.google_account,
-            on_event=self.record_event,
-        )
-        gemini_session.init_client()
-
-        audio_pipe = AudioPipeline(
-            mini=reachy_mini,
-            stop=stop_event,
-            config=self.config,
-            music=music,
-            on_level=lambda lvl: setattr(self, "mic_level", lvl),
-        )
-
-        # Define REST API routes on self.settings_app
+    def _setup_routes(self) -> None:
         app = self.settings_app
+
+        @app.get("/")
+        def serve_index():
+            index_file = STATIC_DIR / "index.html"
+            if index_file.exists():
+                return FileResponse(index_file)
+            return HTMLResponse("<h2>Reachy Gemini DJ starting...</h2><p>Please wait a moment and refresh.</p>")
+
+        if STATIC_DIR.exists():
+            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
         @app.get("/api/state")
         def get_state():
+            g_state = self.gemini_session.state if self.gemini_session else "starting"
+            g_err = self.gemini_session.last_error if self.gemini_session else ""
+            m_status = (
+                self.motion.status()
+                if self.motion
+                else {
+                    "enabled": self.config.motion_enabled,
+                    "busy": False,
+                    "last": "",
+                    "emotions_ready": False,
+                    "dances_ready": False,
+                    "error": "",
+                }
+            )
+
             return {
-                "version": "0.2.0",
-                "gemini": gemini_session.state,
+                "version": "0.2.1",
+                "gemini": g_state,
                 "model": self.config.model,
-                "error": gemini_session.last_error,
+                "error": g_err,
                 "muted": self.muted,
                 "mic_level": self.mic_level,
                 "heard": self.heard_text,
@@ -144,9 +148,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "motion_enabled": self.config.motion_enabled,
                     "expressive": self.config.expressive,
                 },
-                "music": music.get_status(),
+                "music": self.music.get_status(),
                 "google": self.google_account.public(),
-                "motion": motion.status(),
+                "motion": m_status,
                 "events": list(self.events),
             }
 
@@ -157,59 +161,63 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
             self.config.save()
-            music.set_volume(self.config.music_volume)
-            if "api_key" in d:
-                gemini_session.init_client()
+            self.music.set_volume(self.config.music_volume)
+            if "api_key" in d and self.gemini_session:
+                self.gemini_session.init_client()
             return {"ok": True}
 
         @app.post("/api/mute")
         def set_mute(data: MuteUpdate):
             self.muted = data.muted
-            audio_pipe.set_mute(self.muted)
+            if self.audio_pipe:
+                self.audio_pipe.set_mute(self.muted)
             return {"ok": True, "muted": self.muted}
 
         @app.post("/api/new_conversation")
         def new_conversation():
             self.heard_text = ""
             self.said_text = ""
-            gemini_session.init_client()
+            if self.gemini_session:
+                self.gemini_session.init_client()
             return {"ok": True}
 
         # Music endpoints
         @app.post("/api/music/pause")
         def music_pause():
-            return music.pause()
+            return self.music.pause()
 
         @app.post("/api/music/resume")
         def music_resume():
-            return music.resume()
+            return self.music.resume()
 
         @app.post("/api/music/skip")
         def music_skip():
-            return music.skip()
+            return self.music.skip()
 
         @app.post("/api/music/stop")
         def music_stop():
-            return music.stop()
+            return self.music.stop()
 
         # Robot endpoints
         @app.get("/api/robot/moves")
         def list_moves():
             return {
                 "emotions": EMOTION_NAMES,
-                "dances": motion.dance_names(),
-                "status": motion.status(),
+                "dances": self.motion.dance_names() if self.motion else [],
+                "status": self.motion.status() if self.motion else {},
             }
 
         @app.post("/api/robot/move")
         def trigger_move(req: MoveRequest):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
             try:
                 if req.kind == "head":
-                    res = motion.move_head(req.value)
+                    res = self.motion.move_head(req.value)
                 elif req.kind == "emotion":
-                    res = motion.emotion(req.value)
+                    res = self.motion.emotion(req.value)
                 elif req.kind == "dance":
-                    res = motion.dance(req.value)
+                    res = self.motion.dance(req.value)
                 else:
                     return {"ok": False, "error": "Unknown move kind"}
                 return {"ok": True, "result": res}
@@ -246,29 +254,51 @@ class ReachyGeminiDJ(ReachyMiniApp):
             self.google_account.disconnect()
             return {"ok": True}
 
-        # Static UI mount
-        if STATIC_DIR.exists():
-            app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
+        log.info("Starting Reachy Gemini DJ v0.2.1...")
+        self.record_event("info", "Reachy Gemini DJ starting")
 
-            @app.get("/")
-            def serve_index():
-                return FileResponse(STATIC_DIR / "index.html")
+        # Initialize Motion subsystem connected to live robot
+        self.motion = Motion(
+            mini=reachy_mini,
+            stop=stop_event,
+            enabled=lambda: self.config.motion_enabled,
+        )
+
+        # Initialize Gemini & Audio
+        self.gemini_session = GeminiSession(
+            config=self.config,
+            music=self.music,
+            motion=self.motion,
+            google_account=self.google_account,
+            on_event=self.record_event,
+        )
+        self.gemini_session.init_client()
+
+        self.audio_pipe = AudioPipeline(
+            mini=reachy_mini,
+            stop=stop_event,
+            config=self.config,
+            music=self.music,
+            on_level=lambda lvl: setattr(self, "mic_level", lvl),
+        )
 
         # Start audio background loop
-        audio_pipe.start()
+        self.audio_pipe.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
-            if self.config.expressive and self.config.motion_enabled and not motion.busy and not music.is_playing:
+            if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing:
                 time.sleep(12.0)
-                if not motion.busy and not stop_event.is_set():
-                    motion.move_head("front")
+                if not self.motion.busy and not stop_event.is_set():
+                    self.motion.move_head("front")
             else:
                 time.sleep(1.0)
 
         log.info("Stopping Reachy Gemini DJ...")
-        audio_pipe.stop()
-        music.stop()
+        if self.audio_pipe:
+            self.audio_pipe.stop()
+        self.music.stop()
 
 
 if __name__ == "__main__":

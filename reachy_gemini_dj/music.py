@@ -21,7 +21,7 @@ class MusicPlayer:
     def __init__(self, volume: float = 0.70):
         self._volume = max(0.0, min(1.0, float(volume)))
         self._duck_factor = 1.0
-        self._state = "idle"  # 'idle', 'playing', 'paused'
+        self._state = "idle"  # 'idle', 'playing', 'paused', 'loading'
         self._current_track = ""
         self._current_artist = ""
         self._duration = 0.0
@@ -59,21 +59,14 @@ class MusicPlayer:
     def set_volume(self, volume: float) -> None:
         with self._lock:
             self._volume = max(0.0, min(1.0, float(volume)))
-            self._apply_volume()
 
     def set_duck(self, duck_level: float) -> None:
         with self._lock:
             self._duck_factor = max(0.0, min(1.0, float(duck_level)))
-            self._apply_volume()
 
     def reset_duck(self) -> None:
         with self._lock:
             self._duck_factor = 1.0
-            self._apply_volume()
-
-    def _apply_volume(self) -> None:
-        # Effective volume is base volume * duck_factor
-        pass
 
     def play(self, query: str) -> dict[str, Any]:
         if not query.strip():
@@ -182,7 +175,6 @@ class MusicPlayer:
             self._elapsed_paused = 0.0
             self._state = "playing"
 
-            # Launch ffplay or mpv in background
             cmd = [
                 "ffplay",
                 "-nodisp",

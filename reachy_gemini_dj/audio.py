@@ -36,7 +36,7 @@ class AudioPipeline:
         self._thread = threading.Thread(target=self._run, daemon=True, name="audio-pipeline")
         self._thread.start()
 
-    def stop_pipeline(self) -> None:
+    def stop(self) -> None:
         pass
 
     def _run(self) -> None:
@@ -57,11 +57,9 @@ class AudioPipeline:
                 if hasattr(self.mini, "get_audio_sample"):
                     sample = self.mini.get_audio_sample()
                 if sample is not None and len(sample) > 0:
-                    # Calculate RMS
                     rms = self._calc_rms(sample)
                     self.on_level(rms)
 
-                    # Dynamic audio ducking
                     threshold = 0.03 * self.config.echo_guard
                     if rms > threshold:
                         if not self._is_speaking:

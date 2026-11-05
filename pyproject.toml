@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reachy_gemini_dj"
-version = "0.2.0"
+version = "0.2.1"
 description = "Expressive Gemini Live Voice DJ with built-in dances, Google Workspace tools, and web UI for Reachy Mini."
 authors = [{ name = "sillymastermind" }]
 readme = "README.md"
@@ -22,6 +22,15 @@ dependencies = [
 [project.entry-points."reachy_mini_apps"]
 reachy_gemini_dj = "reachy_gemini_dj.main:ReachyGeminiDJ"
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["reachy_gemini_dj*"]
+
+[tool.setuptools.package-data]
+reachy_gemini_dj = [
+    "static/**/*",
+    "static/*",
+]
