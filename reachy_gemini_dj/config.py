@@ -16,7 +16,7 @@ CONFIG_FILE = HOME / "config.json"
 @dataclass
 class Config:
     api_key: str = ""
-    model: str = "gemini-2.0-flash-exp"
+    model: str = "gemini-2.5-flash-native-audio-latest"
     voice: str = "Puck"
     extra_instructions: str = ""
     music_volume: float = 0.70
@@ -26,6 +26,17 @@ class Config:
     web_search: bool = False
     motion_enabled: bool = True
     expressive: bool = True
+    dance_enabled: bool = False
+
+    @property
+    def effective_model(self) -> str:
+        m = (self.model or "").strip()
+        low = m.lower()
+        if not m or "dialog" in low or "flash native" in low or "2.0-flash" in low:
+            return "gemini-2.5-flash-native-audio-latest"
+        if not m.startswith("models/") and not m.startswith("gemini-"):
+            return "gemini-2.5-flash-native-audio-latest"
+        return m
 
     def save(self) -> None:
         HOME.mkdir(parents=True, exist_ok=True)

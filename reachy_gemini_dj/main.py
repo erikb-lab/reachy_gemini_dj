@@ -44,6 +44,7 @@ class ConfigUpdate(BaseModel):
     web_search: bool | None = None
     motion_enabled: bool | None = None
     expressive: bool | None = None
+    dance_enabled: bool | None = None
 
 
 class MuteUpdate(BaseModel):
@@ -84,11 +85,27 @@ class ReachyGeminiDJ(ReachyMiniApp):
         # Subsystems initialized at startup
         self.music = MusicPlayer(volume=self.config.music_volume)
         self.motion: Motion | None = None
-        self.gemini_session: GeminiSession | None = None
         self.audio_pipe: AudioPipeline | None = None
+        self.gemini_session = GeminiSession(
+            config=self.config,
+            music=self.music,
+            motion=None,
+            google_account=self.google_account,
+            on_event=self.record_event,
+            on_voice_chunk=lambda chunk: self.audio_pipe.play_voice(chunk) if self.audio_pipe else None,
+            on_barge_in=lambda: self.audio_pipe.clear_voice() if self.audio_pipe else None,
+            on_heard=self._set_heard,
+            on_said=self._set_said,
+        )
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
+
+    def _set_heard(self, text: str) -> None:
+        self.heard_text = (self.heard_text + " " + text).strip()[-300:]
+
+    def _set_said(self, text: str) -> None:
+        self.said_text = (self.said_text + " " + text).strip()[-300:]
 
     def record_event(self, kind: str, text: str) -> None:
         t = datetime.datetime.now().strftime("%H:%M:%S")
@@ -147,6 +164,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "web_search": self.config.web_search,
                     "motion_enabled": self.config.motion_enabled,
                     "expressive": self.config.expressive,
+                    "dance_enabled": self.config.dance_enabled,
                 },
                 "music": self.music.get_status(),
                 "google": self.google_account.public(),
@@ -263,17 +281,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
             mini=reachy_mini,
             stop=stop_event,
             enabled=lambda: self.config.motion_enabled,
+            dance_enabled=lambda: self.config.dance_enabled,
         )
-
-        # Initialize Gemini & Audio
-        self.gemini_session = GeminiSession(
-            config=self.config,
-            music=self.music,
-            motion=self.motion,
-            google_account=self.google_account,
-            on_event=self.record_event,
-        )
-        self.gemini_session.init_client()
+        self.gemini_session.motion = self.motion
 
         self.audio_pipe = AudioPipeline(
             mini=reachy_mini,
@@ -281,10 +291,12 @@ class ReachyGeminiDJ(ReachyMiniApp):
             config=self.config,
             music=self.music,
             on_level=lambda lvl: setattr(self, "mic_level", lvl),
+            on_pcm_chunk=self.gemini_session.push_mic,
         )
 
-        # Start audio background loop
+        # Start background pipelines
         self.audio_pipe.start()
+        self.gemini_session.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
@@ -296,6 +308,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 time.sleep(1.0)
 
         log.info("Stopping Reachy Gemini DJ...")
+        if self.gemini_session:
+            self.gemini_session.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()
         self.music.stop()

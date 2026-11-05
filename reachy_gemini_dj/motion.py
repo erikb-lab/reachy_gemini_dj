@@ -21,7 +21,7 @@ DANCES_REPO = "pollen-robotics/reachy-mini-dances-library"
 
 INTENTS: dict[str, tuple[str, ...]] = {
     "happy": ("laughing2", "laughing1"),
-    "excited": ("dance3", "dance2"),
+    "excited": ("success1", "success2", "laughing1"),
     "loving": ("loving1",),
     "grateful": ("grateful1",),
     "success": ("success1", "success2"),
@@ -66,8 +66,8 @@ def _norm(s: str) -> str:
 
 
 class Motion:
-    def __init__(self, mini, stop: threading.Event, enabled=lambda: True):
-        self.mini, self._stop, self._enabled = mini, stop, enabled
+    def __init__(self, mini, stop: threading.Event, enabled=lambda: True, dance_enabled=lambda: False):
+        self.mini, self._stop, self._enabled, self._dance_enabled = mini, stop, enabled, dance_enabled
         self._q: queue.Queue = queue.Queue(maxsize=1)
         self._libs: dict[str, object] = {}
         self._lib_err: dict[str, str] = {}
@@ -197,6 +197,10 @@ class Motion:
         return name
 
     def dance(self, requested: str = "") -> str:
+        if not self._dance_enabled():
+            log.info("Dancing is disabled in settings; playing expressive emotion instead")
+            return self.emotion("happy")
+
         lib = self._lib(DANCES_REPO)
         if lib is None:
             raise RuntimeError("The built-in dance moves are not available right now.")

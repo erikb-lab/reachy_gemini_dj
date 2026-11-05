@@ -330,8 +330,9 @@ code{background:var(--bg);padding:2px 6px;border-radius:6px;font-size:13px}
   <div class="grid-2">
     <div class="card">
       <h2>Movement Controls</h2>
-      <div class="sw"><div><b>Enable Robot Movement</b><span>Allow built-in head moves, emotions, and dances.</span></div><input type="checkbox" id="motion_enabled"></div>
+      <div class="sw"><div><b>Enable Robot Movement</b><span>Allow built-in head moves, emotions, and gestures.</span></div><input type="checkbox" id="motion_enabled"></div>
       <div class="sw"><div><b>Be Expressive</b><span>Reachy automatically adds subtle head gestures while chatting.</span></div><input type="checkbox" id="expressive"></div>
+      <div class="sw"><div><b>Allow Dancing</b><span>Allow full dance moves. When off, Reachy stays expressive without dancing.</span></div><input type="checkbox" id="dance_enabled"></div>
       <div id="mo-note" class="note hide" style="margin-top:12px"></div>
     </div>
 
@@ -416,7 +417,7 @@ const SL={music_volume:v=>Math.round(v*100)+'%',duck_level:v=>Math.round(v*100)+
 Object.keys(SL).forEach(id=>{const el=$(id),out=el.parentNode.querySelector('output');
   el.addEventListener('input',()=>{picking=id;out.textContent=SL[id](+el.value)});
   el.addEventListener('change',()=>api('/api/config',{[id]:+el.value}).then(()=>{picking=null}))});
-['web_search','motion_enabled','expressive'].forEach(id=>$(id).addEventListener('change',e=>
+['web_search','motion_enabled','expressive','dance_enabled'].forEach(id=>$(id).addEventListener('change',e=>
   api('/api/config',{[id]:e.target.checked}).then(()=>toast('Saved'))));
 $('voice').addEventListener('change',e=>api('/api/config',{voice:e.target.value}).then(()=>toast('Voice changed')));
 
@@ -463,7 +464,7 @@ async function poll(){
   $('ver').textContent='v'+(S.version||''); const c=S.config;
   document.querySelectorAll('input[type=range]').forEach(el=>{ if(picking===el.id||!(el.id in c))return; el.value=c[el.id];
     const o=el.parentNode.querySelector('output'); if(o)o.textContent=SL[el.id](+c[el.id]) });
-  ['web_search','motion_enabled','expressive'].forEach(id=>$(id).checked=!!c[id]);
+  ['web_search','motion_enabled','expressive','dance_enabled'].forEach(id=>$(id).checked=!!c[id]);
   const vs=$('voice'); if(!vs.options.length){S.voices.forEach(v=>vs.add(new Option(v,v)))} if(document.activeElement!==vs)vs.value=c.voice;
   [['extra_instructions',c.extra_instructions],['model',c.model]].forEach(([id,v])=>{if(document.activeElement!==$(id))$(id).value=v||''});
   $('keystate').textContent=c.api_key_set?'\u2713 saved':'\u26A0 not set'; $('keystate').style.color=c.api_key_set?'var(--ok)':'var(--warn)';

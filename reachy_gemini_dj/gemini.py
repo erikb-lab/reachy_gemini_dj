@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
+import time
 from typing import Any, Callable
 
-import google.genai as genai
+from google import genai
 from google.genai import types
 
 log = logging.getLogger(__name__)
@@ -179,34 +181,231 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
 
 
 class GeminiSession:
-    """Manages the connection, audio streams, and tool execution with Gemini."""
+    """Manages the connection, audio streams, and tool execution with Gemini Live."""
 
-    def __init__(self, config, music, motion, google_account, on_event: Callable[[str, str], None]):
+    def __init__(
+        self,
+        config,
+        music,
+        motion,
+        google_account,
+        on_event: Callable[[str, str], None],
+        on_voice_chunk: Callable[[bytes], None] | None = None,
+        on_barge_in: Callable[[], None] | None = None,
+        on_heard: Callable[[str], None] | None = None,
+        on_said: Callable[[str], None] | None = None,
+    ):
         self.config = config
         self.music = music
         self.motion = motion
         self.google = google_account
         self.on_event = on_event
-        self.client: genai.Client | None = None
+        self.on_voice_chunk = on_voice_chunk or (lambda chunk: None)
+        self.on_barge_in = on_barge_in or (lambda: None)
+        self.on_heard = on_heard or (lambda text: None)
+        self.on_said = on_said or (lambda text: None)
+
         self.state = "starting"
         self.last_error = ""
 
+        self._stop_event = threading.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._mic_queue: asyncio.Queue | None = None
+        self._restart_event: asyncio.Event | None = None
+        self._worker_thread: threading.Thread | None = None
+        self._connected = False
+        self._handle: str | None = None
+
+    def push_mic(self, pcm_16k: bytes) -> None:
+        """Enqueue 16 kHz 16-bit PCM chunk from microphone to send to Gemini Live."""
+        loop, q = self._loop, self._mic_queue
+        if loop and q and self._connected:
+            loop.call_soon_threadsafe(self._enqueue, pcm_16k)
+
+    def _enqueue(self, pcm: bytes) -> None:
+        q = self._mic_queue
+        if q:
+            if q.full():
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            q.put_nowait(pcm)
+
     def init_client(self) -> bool:
+        """Trigger reconnection or reset."""
         if not self.config.api_key:
             self.state = "needs_key"
             return False
+        if self._loop and self._restart_event:
+            self._loop.call_soon_threadsafe(self._restart_event.set)
+        return True
+
+    def start(self) -> None:
+        if self._worker_thread and self._worker_thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._worker_thread = threading.Thread(target=self._run_thread, daemon=True, name="gemini-live")
+        self._worker_thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._loop and self._restart_event:
+            self._loop.call_soon_threadsafe(self._restart_event.set)
+
+    def _run_thread(self) -> None:
+        asyncio.run(self._main_async())
+
+    async def _main_async(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._mic_queue = asyncio.Queue(maxsize=150)
+        self._restart_event = asyncio.Event()
+
+        while not self._stop_event.is_set():
+            key = (self.config.api_key or "").strip()
+            if not key:
+                self.state = "needs_key"
+                await asyncio.sleep(1.0)
+                continue
+
+            try:
+                await self._session_loop(key)
+            except Exception as e:
+                log.warning("Gemini Live session disconnected: %s", e)
+                self.state = "error"
+                self.last_error = str(e)
+                await asyncio.sleep(2.0)
+
+    def _build_live_config(self) -> types.LiveConnectConfig:
+        voice_name = self.config.voice if self.config.voice in VOICES else "Puck"
+        instructions = SYSTEM_PROMPT
+        if self.config.extra_instructions:
+            instructions += f"\n\nUser Context:\n{self.config.extra_instructions}"
+
+        kw: dict[str, Any] = dict(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(parts=[types.Part(text=instructions)]),
+            tools=build_tools(enable_search=self.config.web_search),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            ),
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+        )
+        if self._handle:
+            kw["session_resumption"] = types.SessionResumptionConfig(handle=self._handle)
+
         try:
-            self.client = genai.Client(api_key=self.config.api_key, http_options={"api_version": "v1alpha"})
-            self.state = "connecting"
-            return True
-        except Exception as e:
-            self.state = "error"
-            self.last_error = str(e)
-            return False
+            kw["realtime_input_config"] = types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=100,
+                    silence_duration_ms=500,
+                )
+            )
+        except Exception:
+            pass
+
+        return types.LiveConnectConfig(**kw)
+
+    async def _session_loop(self, key: str) -> None:
+        self.state = "connecting"
+        self._restart_event.clear()
+
+        # Resolve model name
+        model = getattr(self.config, "effective_model", self.config.model)
+        client = genai.Client(api_key=key, http_options={"api_version": "v1alpha"})
+
+        log.info("Connecting to Gemini Live (model=%s, voice=%s)...", model, self.config.voice)
+        live_cfg = self._build_live_config()
+
+        async with client.aio.live.connect(model=model, config=live_cfg) as session:
+            log.info("Connected to Gemini Live session!")
+            self.state = "listening"
+            self.last_error = ""
+            self._connected = True
+            self.on_event("gemini", f"Connected to {model}")
+
+            # Flush stale mic buffer
+            while not self._mic_queue.empty():
+                self._mic_queue.get_nowait()
+
+            tasks = [
+                asyncio.create_task(self._send_loop(session)),
+                asyncio.create_task(self._recv_loop(session)),
+                asyncio.create_task(self._restart_event.wait()),
+            ]
+            try:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for d in done:
+                    d.result()
+            finally:
+                self._connected = False
+                for t in tasks:
+                    t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                self.on_barge_in()
+
+    async def _send_loop(self, session) -> None:
+        q = self._mic_queue
+        while True:
+            buf = await q.get()
+            # Batch ~40ms chunks for network efficiency
+            while len(buf) < 1280 and not q.empty():
+                buf += q.get_nowait()
+            await session.send_realtime_input(
+                audio=types.Blob(data=buf, mime_type="audio/pcm;rate=16000")
+            )
+
+    async def _recv_loop(self, session) -> None:
+        while True:
+            async for msg in session.receive():
+                if msg.tool_call:
+                    await self._handle_tool_call(session, msg.tool_call)
+
+                sc = msg.server_content
+                if sc:
+                    if sc.interrupted:
+                        log.info("Gemini output interrupted (barge-in)")
+                        self.on_barge_in()
+
+                    if sc.model_turn and sc.model_turn.parts:
+                        for part in sc.model_turn.parts:
+                            if part.inline_data and part.inline_data.data:
+                                self.on_voice_chunk(part.inline_data.data)
+
+                    if sc.input_transcription and sc.input_transcription.text:
+                        self.on_heard(sc.input_transcription.text)
+
+                    if sc.output_transcription and sc.output_transcription.text:
+                        self.on_said(sc.output_transcription.text)
+
+                upd = getattr(msg, "session_resumption_update", None)
+                if upd and upd.resumable and upd.new_handle:
+                    self._handle = upd.new_handle
+
+                if getattr(msg, "go_away", None):
+                    raise ConnectionError("Server requested disconnect (go_away)")
+
+    async def _handle_tool_call(self, session, tool_call) -> None:
+        responses = []
+        for fc in tool_call.function_calls or []:
+            args = dict(fc.args or {})
+            log.info("Tool invocation requested: %s with args %s", fc.name, args)
+            try:
+                res = await asyncio.to_thread(self.execute_tool, fc.name, args)
+            except Exception as e:
+                log.exception("Tool %s execution failed", fc.name)
+                res = {"error": f"{type(e).__name__}: {e}"}
+            responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=res))
+
+        await session.send_tool_response(function_responses=responses)
 
     def execute_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         """Dispatch function calls from Gemini to local handlers."""
-        log.info("Tool invocation: %s with args %s", name, args)
         self.on_event("tool", f"Tool call: {name}")
 
         try:
