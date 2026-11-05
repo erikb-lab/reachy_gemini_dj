@@ -58,7 +58,7 @@ class MusicPlayer:
 
     def set_volume(self, volume: float) -> None:
         with self._lock:
-            self._volume = max(0.0, min(1.0, float(volume)))
+            self._volume = max(0.0, min(3.0, float(volume)))
 
     def set_duck(self, duck_level: float) -> None:
         with self._lock:
@@ -182,6 +182,7 @@ class MusicPlayer:
             self._elapsed_paused = 0.0
             self._state = "playing"
 
+            effective_vol = self._volume * self._duck_factor
             header_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items()) if headers else ""
             cmd = [
                 "ffplay",
@@ -189,9 +190,12 @@ class MusicPlayer:
                 "-autoexit",
                 "-loglevel",
                 "warning",
-                "-volume",
-                str(int(self._volume * self._duck_factor * 100)),
             ]
+            if effective_vol > 1.0:
+                cmd += ["-volume", "100", "-af", f"volume={effective_vol:.2f}"]
+            else:
+                cmd += ["-volume", str(int(effective_vol * 100))]
+
             if header_str:
                 cmd += ["-headers", header_str]
             cmd += [
@@ -203,7 +207,7 @@ class MusicPlayer:
                 "5",
                 stream_url,
             ]
-            log.info("Starting ffplay for %s (vol=%d)", title, int(self._volume * self._duck_factor * 100))
+            log.info("Starting ffplay for %s (vol=%.2fx)", title, effective_vol)
             self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             proc = self._proc
 

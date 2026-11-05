@@ -19,9 +19,9 @@ class Config:
     model: str = "gemini-2.5-flash-native-audio-latest"
     voice: str = "Puck"
     extra_instructions: str = ""
-    music_volume: float = 0.70
+    music_volume: float = 2.00
     duck_level: float = 0.20
-    voice_gain: float = 1.00
+    voice_gain: float = 1.50
     echo_guard: float = 1.50
     web_search: bool = False
     motion_enabled: bool = True
