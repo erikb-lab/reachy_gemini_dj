@@ -191,7 +191,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.3.0",
+                "version": "0.4.0",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
@@ -397,7 +397,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {"ok": True}
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.3.0...")
+        log.info("Starting Reachy Gemini DJ v0.4.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot
