@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel test harness</title>
+<link rel="stylesheet" href="/static/settings.css">
+<style>
+  :root { --bg:#f6f7f9; --fg:#1b1e24; --card:#fff; --accent:#3b6cff; --muted:#626b7a; --border:#d9dde4; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14161a; --fg:#e8eaee; --card:#1d2026; --accent:#7d9bff; --muted:#9aa3b2; --border:#343944; } }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; }
+  main { max-width:900px; margin:0 auto; display:grid; gap:16px; grid-template-columns:1fr 1fr; }
+  @media (max-width:700px) { main { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <section id="robot-panel"></section>
+  <section id="settings-panel"></section>
+</main>
+<script>
+/* Fake window.reachyApi: polls /api/state like the real index.html will. */
+(function () {
+  var last = null, subs = [];
+  window.reachyApi = { state: function () { return last; }, subscribe: function (fn) { subs.push(fn); } };
+  function poll() {
+    fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
+      last = s; subs.forEach(function (f) { f(s); });
+    }).catch(function () {});
+  }
+  poll(); setInterval(poll, 2000);
+})();
+</script>
+<script src="/static/robot.js" defer></script>
+<script src="/static/settings.js" defer></script>
+</body>
+</html>
