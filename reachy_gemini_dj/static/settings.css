@@ -81,3 +81,14 @@
   .rp-grid { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
   .sp-row { flex-direction: column; }
 }
+
+/* Learn poses */
+.rp-learn-row { margin: 12px 0 6px; }
+.rp-learn.on { background: var(--warn, #a96d00); border-color: var(--warn, #a96d00); color: #fff; }
+.rp-learn-hint.on { color: var(--warn, #a96d00); font-weight: 600; font-size: .9rem; }
+#rp-pose-name { flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border-radius: 10px;
+  border: 1px solid var(--p-border); background: var(--p-bg); color: var(--p-fg); font: inherit; }
+.rp-pose-list { display: flex; flex-direction: column; gap: 8px; }
+.rp-pose { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border: 1px solid var(--p-border);
+  border-radius: 12px; }
+.rp-pose-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

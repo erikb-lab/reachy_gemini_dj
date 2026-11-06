@@ -65,6 +65,14 @@ class MoveRequest(BaseModel):
     value: str
 
 
+class PoseName(BaseModel):
+    name: str
+
+
+class LearnToggle(BaseModel):
+    on: bool
+
+
 class GoogleClientUpdate(BaseModel):
     client_id: str
     client_secret: str
@@ -288,6 +296,54 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception as e:
                 return {"ok": False, "error": str(e)}
 
+        # Taught poses: relax motors, move the robot by hand, save (written to disk right away)
+        @app.get("/api/poses")
+        def list_poses():
+            if not self.motion:
+                return {"ok": False, "learning": False, "poses": [], "error": "Robot motion subsystem not ready"}
+            return {"ok": True, "learning": self.motion.learning, "poses": self.motion.poses.listing()}
+
+        @app.post("/api/poses/learn")
+        def learn_mode(req: LearnToggle):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                res = self.motion.learn_start() if req.on else self.motion.learn_stop()
+                self.record_event("pose", res)
+                return {"ok": True, "learning": self.motion.learning, "result": res}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        @app.post("/api/poses/save")
+        def save_pose(req: PoseName):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                name = self.motion.save_pose(req.name)
+                self.record_event("pose", f"Saved pose '{name}'")
+                return {"ok": True, "name": name, "poses": self.motion.poses.listing()}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        @app.post("/api/poses/play")
+        def play_pose(req: PoseName):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                return {"ok": True, "name": self.motion.goto_pose(req.name)}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        @app.post("/api/poses/delete")
+        def delete_pose(req: PoseName):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                ok = self.motion.poses.delete(req.name)
+                return {"ok": ok, "poses": self.motion.poses.listing(), **({} if ok else {"error": "No such pose"})}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
         # Google endpoints
         @app.post("/api/google/client")
         def set_google_client(req: GoogleClientUpdate):
@@ -358,6 +414,11 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 time.sleep(1.0)
 
         log.info("Stopping Reachy Gemini DJ...")
+        if self.motion and self.motion.learning:
+            try:
+                self.motion.learn_stop()           # never leave the motors relaxed
+            except Exception:
+                pass
         self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()

@@ -105,6 +105,24 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 required=["direction"],
             ),
         ),
+        types.FunctionDeclaration(
+            name="robot_pose",
+            description="Move into a pose the user taught you by hand, by its saved name (e.g. 'wave', 'bow').",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"name": types.Schema(type="STRING", description="Name of the saved pose.")},
+                required=["name"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="save_pose",
+            description="Remember the robot's current position as a named pose, when the user asks you to save or remember this pose.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"name": types.Schema(type="STRING", description="Name to save the pose under.")},
+                required=["name"],
+            ),
+        ),
         # Google Workspace Tools
         types.FunctionDeclaration(
             name="calendar_events",
@@ -444,6 +462,15 @@ class GeminiSession:
                 if self.motion:
                     res = self.motion.move_head(args.get("direction", "front"))
                     return {"result": res}
+                return {"error": "Robot motion not ready yet"}
+
+            elif name == "robot_pose":
+                if self.motion:
+                    return {"result": f"Moving to pose {self.motion.goto_pose(args.get('name', ''))}"}
+                return {"error": "Robot motion not ready yet"}
+            elif name == "save_pose":
+                if self.motion:
+                    return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
                 return {"error": "Robot motion not ready yet"}
 
             # Google

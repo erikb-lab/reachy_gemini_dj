@@ -77,7 +77,89 @@
         h('span', { class: 'txt' }, [h('b', { text: s[1] }), h('span', { text: s[2] })]), inp]));
     });
     root.appendChild(card);
+    buildPoses();
     renderMoves();
+  }
+
+  /* ---- Learn poses: relax motors, pose Reachy by hand, save (written to the robot's disk at once) ---- */
+  var poseNames = null, learning = false;
+  function buildPoses() {
+    var card = h('div', { class: 'pn-card', id: 'rp-poses' });
+    card.appendChild(h('h2', { text: 'Learn poses' }));
+    card.appendChild(h('div', { class: 'pn-muted', text: 'Learn mode turns the motors off so you can pose Reachy by hand. Lock turns them back on and holds the pose; Save locks and stores it on the robot right away. ' +
+      'Play saved poses here or say "do your <name> pose".' }));
+    els.learnBtn = h('button', { type: 'button', class: 'pn-btn primary rp-learn', 'aria-pressed': 'false',
+      onclick: function () { setLearn(!learning); } });
+    els.learnHint = h('div', { class: 'rp-learn-hint', 'aria-live': 'polite' });
+    card.appendChild(h('div', { class: 'rp-learn-row' }, [els.learnBtn]));
+    card.appendChild(els.learnHint);
+    els.poseName = h('input', { type: 'text', id: 'rp-pose-name', maxlength: '40', placeholder: 'Pose name, e.g. wave',
+      'aria-label': 'Pose name', autocomplete: 'off',
+      onkeydown: function (e) { if (e.key === 'Enter') savePose(); } });
+    els.poseSave = h('button', { type: 'button', class: 'pn-btn primary', text: 'Save pose', onclick: savePose });
+    card.appendChild(h('h3', { text: 'Save current pose' }));
+    card.appendChild(h('div', { class: 'rp-dance' }, [els.poseName, els.poseSave]));
+    card.appendChild(h('h3', { text: 'Saved poses' }));
+    els.poseList = h('div', { class: 'rp-pose-list' });
+    card.appendChild(els.poseList);
+    root.appendChild(card);
+    renderLearn();
+    fetch('/api/poses').then(function (r) { return r.json(); }).then(function (r) {
+      learning = !!r.learning; renderLearn(); renderPoses((r.poses || []).map(function (p) { return p.name; }));
+    }).catch(function () { renderPoses([]); });
+  }
+  function setLearn(on) {
+    els.learnBtn.disabled = true;
+    post('/api/poses/learn', { on: on }).then(function (r) {
+      if (r && r.ok) { learning = !!r.learning; toast(on ? 'Motors off: pose Reachy by hand' : 'Motors on: pose locked'); }
+      else toast((r && r.error) || 'Could not change learn mode', true);
+    }).catch(function (e) { toast('Could not reach the app (' + e.message + ')', true); })
+      .then(function () { els.learnBtn.disabled = false; renderLearn(); });
+  }
+  function renderLearn() {
+    els.learnBtn.textContent = learning ? 'Lock pose (motors on)' : 'Learn: motors off';
+    els.learnBtn.setAttribute('aria-pressed', learning ? 'true' : 'false');
+    els.learnBtn.classList.toggle('on', learning);
+    els.learnHint.textContent = learning ? 'Motors are OFF. Support the head while you pose it, then press Lock pose or Save pose.' : '';
+    els.learnHint.className = 'rp-learn-hint' + (learning ? ' on' : '');
+  }
+  function savePose() {
+    var name = els.poseName.value.trim();
+    if (!name) { toast('Give the pose a name first', true); els.poseName.focus(); return; }
+    els.poseSave.disabled = true;
+    post('/api/poses/save', { name: name }).then(function (r) {
+      if (r && r.ok) { if (learning) { learning = false; renderLearn(); } toast('Locked and saved "' + r.name + '"'); els.poseName.value = '';
+        renderPoses((r.poses || []).map(function (p) { return p.name; })); }
+      else toast((r && r.error) || 'Save failed', true);
+    }).catch(function (e) { toast('Save failed: ' + e.message, true); })
+      .then(function () { els.poseSave.disabled = false; });
+  }
+  function renderPoses(names) {
+    var key = JSON.stringify(names || []);
+    if (key === poseNames) return;           // only rebuild when the list changed (keeps focus)
+    poseNames = key;
+    els.poseList.textContent = '';
+    if (!names.length) { els.poseList.appendChild(h('div', { class: 'pn-muted', text: 'No poses saved yet.' })); return; }
+    names.forEach(function (n) {
+      els.poseList.appendChild(h('div', { class: 'rp-pose' }, [
+        h('span', { class: 'rp-pose-name', text: n }),
+        h('button', { type: 'button', class: 'pn-btn primary', text: 'Play', 'aria-label': 'Play pose ' + n,
+          onclick: function () {
+            post('/api/poses/play', { name: n }).then(function (r) {
+              if (r && r.ok) { if (learning) { learning = false; renderLearn(); } toast('Reachy: pose ' + r.name); }
+              else toast((r && r.error) || 'Could not play pose', true);
+            }).catch(function (e) { toast('Could not reach the app (' + e.message + ')', true); });
+          } }),
+        h('button', { type: 'button', class: 'pn-btn', text: 'Delete', 'aria-label': 'Delete pose ' + n,
+          onclick: function () {
+            if (!window.confirm('Delete the pose "' + n + '"?')) return;
+            post('/api/poses/delete', { name: n }).then(function (r) {
+              if (r && r.ok) { toast('Deleted "' + n + '"'); renderPoses((r.poses || []).map(function (p) { return p.name; })); }
+              else toast((r && r.error) || 'Delete failed', true);
+            }).catch(function (e) { toast('Delete failed: ' + e.message, true); });
+          } })
+      ]));
+    });
   }
 
   function renderMoves() {
@@ -119,6 +201,10 @@
       if (k in c && document.activeElement !== els.sw[k]) els.sw[k].checked = !!c[k];
     });
     els.danceBtn.disabled = c.motion_enabled === false;
+    if (els.learnBtn && typeof m.learning === 'boolean' && !els.learnBtn.disabled && m.learning !== learning) {
+      learning = m.learning; renderLearn();
+    }
+    if (els.poseList && Array.isArray(m.poses)) renderPoses(m.poses);
   }
 
   function init() {
