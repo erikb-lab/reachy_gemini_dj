@@ -3,516 +3,165 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Reachy Gemini DJ</title>
-<style>
-:root{
-  --bg:#f4f5fb; --card:#fff; --ink:#1b1d2a; --mut:#6b7087; --line:#e4e6f0;
-  --accent:#6c5ce7; --accent2:#00b8d9; --ok:#1fa971; --warn:#e8a317; --bad:#e5484d; --soft:#efedff;
-  --shadow:0 1px 3px rgba(20,20,50,.06),0 10px 28px rgba(20,20,50,.08);
-}
-@media (prefers-color-scheme:dark){:root{
-  --bg:#0f1117; --card:#181b26; --ink:#eceef7; --mut:#9096b0; --line:#272b3b; --soft:#232040;
-  --shadow:0 2px 6px rgba(0,0,0,.45),0 12px 32px rgba(0,0,0,.4);
-}}
-*{box-sizing:border-box} html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
-
-/* Header & Nav in single clean flow - NO negative margins */
-header{
-  background:linear-gradient(120deg,var(--accent),var(--accent2));
-  color:#fff;
-  padding:20px 0 16px;
-  box-shadow:0 4px 18px rgba(0,0,0,.15);
-}
-.wrap{
-  max-width:1240px;
-  width:calc(100% - 36px);
-  margin:0 auto;
-}
-.top{
-  display:flex;
-  align-items:center;
-  gap:14px;
-  margin-bottom:18px;
-}
-.logo{font-size:32px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.25))}
-.top h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.2px}
-.top small{opacity:.85;font-size:13px;font-weight:500}
-.pill{
-  margin-left:auto;
-  display:flex;
-  align-items:center;
-  gap:8px;
-  background:rgba(255,255,255,.2);
-  backdrop-filter:blur(6px);
-  padding:6px 14px;
-  border-radius:999px;
-  font-size:13px;
-  white-space:nowrap;
-}
-.dot{width:9px;height:9px;border-radius:50%;background:#bbb}
-.dot.ok{background:#4cf0a8;box-shadow:0 0 8px #4cf0a8}.dot.warn{background:#ffd166}.dot.bad{background:#ff7b7b}
-
-nav{
-  display:flex;
-  gap:8px;
-  overflow-x:auto;
-  scrollbar-width:none;
-  padding-bottom:2px;
-}
-nav::-webkit-scrollbar{display:none}
-nav button{
-  flex:0 0 auto;
-  border:0;
-  background:rgba(255,255,255,.18);
-  color:#fff;
-  padding:9px 18px;
-  border-radius:999px;
-  font:inherit;
-  font-size:14px;
-  font-weight:600;
-  cursor:pointer;
-  transition:all .18s ease;
-}
-nav button:hover{background:rgba(255,255,255,.3)}
-nav button.on{
-  background:#fff;
-  color:var(--accent);
-  box-shadow:0 2px 10px rgba(0,0,0,.18);
-}
-
-/* Main Content Area */
-main{
-  padding:26px 0 60px;
-}
-.tab{display:none}.tab.on{display:block}
-
-/* Responsive Grid for large screens */
-.grid-2{
-  display:grid;
-  grid-template-columns:1fr;
-  gap:16px;
-  align-items:start;
-}
-@media (min-width:768px){
-  .grid-2{grid-template-columns:repeat(2,1fr)}
-  .grid-full{grid-column:1 / -1}
-}
-
-.card{
-  background:var(--card);
-  border-radius:18px;
-  box-shadow:var(--shadow);
-  padding:20px;
-  margin-bottom:16px;
-  border:1px solid var(--line);
-}
-.card h2{margin:0 0 6px;font-size:17px;font-weight:700}
-.card p.sub{margin:0 0 14px;color:var(--mut);font-size:13.5px}
-
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.row>.grow{flex:1;min-width:140px}
-label{display:block;font-size:12px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;margin:14px 0 6px}
-input[type=text],input[type=password],select,textarea{
-  width:100%;
-  padding:11px 14px;
-  border:1px solid var(--line);
-  border-radius:11px;
-  background:var(--bg);
-  color:var(--ink);
-  font:inherit;
-  transition:border-color .15s;
-}
-textarea{min-height:80px;resize:vertical}
-input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:transparent}
-
-button.btn{
-  border:0;
-  background:var(--accent);
-  color:#fff;
-  padding:10px 18px;
-  border-radius:10px;
-  font:inherit;
-  font-weight:600;
-  cursor:pointer;
-  transition:all .15s;
-}
-button.btn.ghost{background:var(--soft);color:var(--accent)}
-button.btn.danger{background:var(--bad);color:#fff}
-button.btn:hover{filter:brightness(1.08)}
-button.btn:active{transform:scale(.97)}
-button.btn:disabled{opacity:.5}
-
-.chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{
-  border:1px solid var(--line);
-  background:var(--bg);
-  color:var(--ink);
-  padding:8px 14px;
-  border-radius:999px;
-  cursor:pointer;
-  font:inherit;
-  font-size:13.5px;
-  transition:all .15s;
-}
-.chip:hover{background:var(--soft);border-color:var(--accent)}
-.chip:active{transform:scale(.97)}
-
-.steps{counter-reset:s;list-style:none;margin:0;padding:0}
-.steps li{counter-increment:s;display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
-.steps li:last-child{border:0}
-.steps li::before{content:counter(s);flex:0 0 28px;height:28px;border-radius:50%;background:var(--soft);color:var(--accent);display:grid;place-items:center;font-weight:700;font-size:13px}
-.steps li.done::before{content:"\2713";background:var(--ok);color:#fff}
-.steps li.done{color:var(--mut)}
-
-.np{display:flex;gap:16px;align-items:center}
-.disc{width:60px;height:60px;border-radius:16px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;font-size:28px;color:#fff;flex:0 0 60px}
-.np .t{font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.np .a{color:var(--mut);font-size:13.5px}
-.bar{height:6px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:12px}.bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .6s linear}
-.ctl{display:flex;gap:8px;margin-top:14px}.ctl button{flex:1}
-.meter{height:8px;background:var(--line);border-radius:8px;overflow:hidden}.meter>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok),var(--warn));transition:width .12s}
-.bubble{padding:10px 14px;border-radius:14px;margin:8px 0;max-width:92%;font-size:14px;min-height:22px}
-.bubble.u{background:var(--soft);margin-left:auto}.bubble.r{background:var(--bg);border:1px solid var(--line)}
-.bubble:empty::before{content:"\2026";color:var(--mut)}
-
-.feed{max-height:240px;overflow:auto;font-size:13px}.feed div{padding:6px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
-.feed time{color:var(--mut);flex:0 0 64px}.feed .error{color:var(--bad)}
-
-.sl{display:flex;align-items:center;gap:12px;margin:6px 0 10px}.sl input[type=range]{flex:1;accent-color:var(--accent)}.sl output{width:50px;text-align:right;color:var(--mut);font-variant-numeric:tabular-nums;font-weight:600}
-.sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
-.sw:last-child{border:0}.sw b{display:block}.sw span{color:var(--mut);font-size:13px}
-.sw input{appearance:none;width:48px;height:28px;border-radius:99px;background:var(--line);position:relative;cursor:pointer;flex:0 0 48px;transition:.2s}
-.sw input::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
-.sw input:checked{background:var(--accent)}.sw input:checked::after{left:23px}
-
-.pad{display:grid;grid-template-columns:repeat(3,72px);grid-template-rows:repeat(3,56px);gap:10px;justify-content:center;margin:10px 0}
-.pad button{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:14px;font-size:22px;cursor:pointer;transition:all .15s}
-.pad button:hover{background:var(--soft);border-color:var(--accent)}
-.pad .u{grid-column:2}.pad .l{grid-row:2;grid-column:1}.pad .f{grid-row:2;grid-column:2}.pad .r{grid-row:2;grid-column:3}.pad .d{grid-row:3;grid-column:2}
-
-.note{background:var(--soft);border-radius:12px;padding:12px 14px;font-size:13.5px;color:var(--ink)}
-.note.bad{background:rgba(229,72,77,.14);color:#ff8589}.note.ok{background:rgba(31,169,113,.16);color:#4cf0a8}
-a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-code{background:var(--bg);padding:2px 6px;border-radius:6px;font-size:13px}
-#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(90px);background:#222;color:#fff;padding:11px 20px;border-radius:12px;opacity:0;transition:.25s;z-index:99;max-width:90%;box-shadow:0 8px 24px rgba(0,0,0,.4)}
-#toast.on{transform:translateX(-50%);opacity:1}
-.hide{display:none!important}
-</style>
+<link rel="stylesheet" href="/static/controller.css">
 </head>
 <body>
-<header>
+<header id="statusbar" role="banner">
   <div class="wrap">
-    <div class="top">
-      <div class="logo">&#129302;</div>
-      <div><h1>Reachy Gemini DJ</h1><small id="ver">&nbsp;</small></div>
-      <div class="pill"><span class="dot" id="gdot"></span><span id="gstate">connecting&hellip;</span></div>
-    </div>
-    <nav id="nav">
-      <button data-t="home" class="on">Home</button>
-      <button data-t="voice">Voice &amp; audio</button>
-      <button data-t="google">Google</button>
-      <button data-t="robot">Robot</button>
-      <button data-t="adv">Advanced</button>
-    </nav>
+    <div class="brand">&#129302; Reachy DJ <span class="sr">controller</span></div>
+    <span class="stat" id="st-conn" title="Connection to the app"><span class="dot"></span><span>connecting&hellip;</span></span>
+    <span class="stat" id="st-backend" title="Gemini backend state"><span class="dot"></span><span>backend</span></span>
+    <span class="stat" id="st-model" title="Model in use"><span>model: &hellip;</span></span>
+    <span class="stat hide" id="st-err" title="Last error"><span class="dot bad"></span><span></span></span>
   </div>
+  <div id="banner" class="hide" role="status"></div>
 </header>
 
-<main><div class="wrap">
-
-<!-- HOME TAB -->
-<section class="tab on" id="t-home">
-  <div class="card" id="setup">
-    <h2>Get started</h2><p class="sub">Three quick steps to kick things off. You can connect Google anytime later.</p>
-    <ol class="steps">
-      <li id="s1"><div><b>Add your Gemini API key</b><br><span class="sub">Free at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>, then paste it under <a href="#" onclick="go('voice');return false">Voice &amp; audio</a>.</span></div></li>
-      <li id="s2"><div><b>Say &ldquo;play some jazz&rdquo;</b><br><span class="sub">Reachy listens continuously. No wake word needed, just speak naturally.</span></div></li>
-      <li id="s3"><div><b>Connect Google (optional)</b><br><span class="sub">Access Calendar, Tasks, and unread Gmail. <a href="#" onclick="go('google');return false">Set it up</a></span></div></li>
-    </ol>
+<main class="wrap">
+  <div class="tabs" role="tablist" aria-label="Sections" id="tabs">
+    <button role="tab" id="tab-dj" aria-controls="p-dj" aria-selected="true">DJ</button>
+    <button role="tab" id="tab-robot" aria-controls="p-robot" aria-selected="false" tabindex="-1">Robot</button>
+    <button role="tab" id="tab-settings" aria-controls="p-settings" aria-selected="false" tabindex="-1">Settings</button>
   </div>
 
-  <div class="grid-2">
-    <div class="card">
-      <h2>Now playing</h2>
-      <div class="np"><div class="disc">&#9835;</div>
-        <div style="min-width:0"><div class="t" id="trk">Nothing playing</div><div class="a" id="art">Ask Reachy for some music</div></div></div>
-      <div class="bar"><i id="prog"></i></div>
-      <div class="ctl">
-        <button class="btn ghost" onclick="act('pause')">Pause</button>
-        <button class="btn ghost" onclick="act('resume')">Play</button>
-        <button class="btn ghost" onclick="act('skip')">Skip</button>
-        <button class="btn ghost" onclick="act('stop')">Stop</button>
+  <!-- ========== DJ ========== -->
+  <div class="tabpanel" role="tabpanel" id="p-dj" aria-labelledby="tab-dj">
+    <div class="grid">
+      <section class="card" aria-labelledby="h-np">
+        <h2 id="h-np">Now playing</h2>
+        <div class="np">
+          <div class="disc" id="disc" aria-hidden="true">&#9835;</div>
+          <div style="min-width:0">
+            <div class="np-t" id="trk">Nothing playing</div>
+            <div class="np-a" id="art">Ask Reachy for some music</div>
+          </div>
+        </div>
+        <div class="prog" role="progressbar" aria-label="Track progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progbar"><i id="prog"></i></div>
+        <div class="times"><span id="t-el">0:00</span><span id="t-du">0:00</span></div>
+        <div class="transport">
+          <button class="tbtn" id="b-stop" aria-label="Stop" title="Stop">&#9632;</button>
+          <button class="tbtn main" id="b-play" aria-label="Play" title="Play / pause">&#9654;</button>
+          <button class="tbtn" id="b-skip" aria-label="Skip to next" title="Skip">&#9197;</button>
+        </div>
+        <div class="vol">
+          <span class="i" aria-hidden="true">&#128266;</span>
+          <input type="range" id="music_volume" min="0" max="2.5" step="0.05" aria-label="Music volume">
+          <output id="o-vol" for="music_volume">0%</output>
+        </div>
+        <div id="merr" class="note bad hide" role="alert"></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-mic">
+        <h2 id="h-mic">Microphone</h2>
+        <button class="btn mute" id="b-mute" aria-pressed="false">Mute mic</button>
+        <div class="meter" id="meter" role="meter" aria-label="Microphone level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="lvl"></i></div>
+        <div class="bubble u"><small>Heard</small><span class="txt" id="heard"></span></div>
+        <div class="bubble r"><small>Said</small><span class="txt" id="said"></span></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-search">
+        <h2 id="h-search">Play something</h2>
+        <form class="row" id="f-play" autocomplete="off">
+          <label class="sr" for="track_q">Artist, song or genre</label>
+          <input type="text" id="track_q" class="grow" placeholder="Artist, song or genre&hellip;" enterkeyhint="search">
+          <button class="btn" type="submit">Play / queue</button>
+        </form>
+      </section>
+
+      <section class="card" aria-labelledby="h-q">
+        <h2 id="h-q">Queue <span class="badge" id="qn">0</span></h2>
+        <ol class="list" id="queue" aria-live="polite"></ol>
+      </section>
+
+      <section class="card span2" aria-labelledby="h-ev">
+        <h2 id="h-ev">Recent events</h2>
+        <ul class="list" id="feed"></ul>
+      </section>
+    </div>
+  </div>
+
+  <!-- ========== ROBOT (mount point for robot.js) ========== -->
+  <div class="tabpanel hide" role="tabpanel" id="p-robot" aria-labelledby="tab-robot">
+    <section id="robot-panel"><div class="placeholder" data-placeholder>Robot controls are loading&hellip;</div></section>
+  </div>
+
+  <!-- ========== SETTINGS (mount point for settings.js + built-in quick settings) ========== -->
+  <div class="tabpanel hide" role="tabpanel" id="p-settings" aria-labelledby="tab-settings">
+    <section id="settings-panel"><div class="placeholder" data-placeholder>Backend, model and voice settings are loading&hellip;</div></section>
+
+    <details class="acc" id="acc-quick">
+      <summary>Quick settings (built-in)</summary>
+      <div>
+        <label class="l" for="q_api_key">Gemini API key <span id="keystate"></span></label>
+        <div class="row"><input class="grow" type="password" id="q_api_key" placeholder="Paste your key (stored locally on the robot)" autocomplete="off">
+          <button class="btn" id="b-key">Save key</button></div>
+        <label class="l" for="q_voice">Voice</label><select id="q_voice"></select>
+        <label class="l" for="q_extra_instructions">About you (optional)</label>
+        <textarea id="q_extra_instructions" placeholder="e.g. Call me Sam. I like lo-fi when I work."></textarea>
+        <label class="l" for="q_model">Gemini model <span id="curmodel"></span></label>
+        <input type="text" id="q_model" autocomplete="off">
+        <div class="row" style="margin-top:12px"><button class="btn ghost" id="b-text">Save instructions &amp; model</button>
+          <button class="btn ghost" id="b-newconv">Start fresh conversation</button></div>
+
+        <label class="l" for="duck_level">Duck level &mdash; music volume while someone talks</label>
+        <div class="row"><input type="range" id="duck_level" min="0" max="1" step="0.01"><output></output></div>
+        <label class="l" for="voice_gain">Reachy voice loudness</label>
+        <div class="row"><input type="range" id="voice_gain" min="0.2" max="2.5" step="0.05"><output></output></div>
+        <label class="l" for="echo_guard">Echo guard &mdash; raise if music interrupts Reachy, lower if it ignores you</label>
+        <div class="row"><input type="range" id="echo_guard" min="0.5" max="5" step="0.1"><output></output></div>
+
+        <div class="sw"><label for="q_web_search"><b>Google Search grounding</b><br><span class="sub">Real-time web facts, news, weather.</span></label><input type="checkbox" id="q_web_search" data-cfg="web_search"></div>
+        <div class="sw"><label for="q_motion_enabled"><b>Enable robot movement</b></label><input type="checkbox" id="q_motion_enabled" data-cfg="motion_enabled"></div>
+        <div class="sw"><label for="q_expressive"><b>Be expressive</b></label><input type="checkbox" id="q_expressive" data-cfg="expressive"></div>
+        <div class="sw"><label for="q_dance_enabled"><b>Allow dancing</b></label><input type="checkbox" id="q_dance_enabled" data-cfg="dance_enabled"></div>
       </div>
-      <div class="row" style="margin-top:14px">
-        <input type="text" id="track_q" placeholder="Play artist or track name..." class="grow" onkeydown="if(event.key==='Enter')playTrack()">
-        <button class="btn ghost" onclick="playTrack()">Queue</button>
+    </details>
+
+    <details class="acc" id="acc-google">
+      <summary>Google account <span class="badge" id="g-badge">not connected</span></summary>
+      <div>
+        <div id="g-on">
+          <p class="sub" id="g-who"></p>
+          <div class="chips" id="g-svcs" style="margin-bottom:12px"></div>
+          <div id="g-reconnect" class="note bad hide">Google sign-in expired. Connect again below.</div>
+          <p class="sub">Try: &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo;, &ldquo;Add milk to my tasks&rdquo;, &ldquo;Check my email&rdquo;.</p>
+          <button class="btn danger" id="b-gdis">Disconnect Google</button>
+        </div>
+        <div id="g-setup">
+          <p class="sub">Uses your own free Google Desktop App OAuth client. About 5 minutes, once.</p>
+          <ol class="steps">
+            <li>Open <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer">Google Cloud &rarr; Clients</a>, make a project, <b>Create client</b> &rarr; <b>Desktop app</b>. Enable the Calendar, Tasks and Gmail APIs you want.</li>
+            <li>On the <b>Audience</b> page add your Google address as a test user, or <b>Publish app</b> so sign-in does not expire after 7 days.</li>
+            <li>Paste the client ID and secret:
+              <label class="sr" for="gid">Client ID</label><input type="text" id="gid" placeholder="Client ID" style="margin-top:8px" autocomplete="off">
+              <label class="sr" for="gsec">Client secret</label><input type="password" id="gsec" placeholder="Client secret" style="margin-top:8px" autocomplete="off">
+              <div id="g-saved" class="sub hide"></div></li>
+            <li>Choose what Reachy may access: <div id="g-pick" class="chips" style="margin-top:8px"></div></li>
+            <li><button class="btn" id="b-gstart">Connect Google</button>
+              <div class="sub">A Google tab will open. Approve it. The next page will say it cannot be reached (expected).</div></li>
+            <li>Copy the <b>entire URL</b> from that address bar and paste it here:
+              <label class="sr" for="gurl">Redirect URL</label><input type="text" id="gurl" placeholder="http://localhost:8765/?state=...&code=..." style="margin-top:8px" autocomplete="off">
+              <div style="margin-top:10px"><button class="btn" id="b-gfinish">Finish connection</button></div></li>
+          </ol>
+          <div id="g-err" class="note bad hide" role="alert"></div>
+          <p class="sub" style="margin-top:12px">Gmail is read-only. Reachy can add events and tasks but never deletes anything.</p>
+        </div>
       </div>
-      <div class="sl" style="margin-top:16px"><span>Volume</span><input type="range" id="music_volume" min="0" max="2.5" step="0.05"><output></output></div>
-      <div id="merr" class="note bad hide" style="margin-top:10px"></div>
-    </div>
+    </details>
 
-    <div class="card">
-      <div class="row"><h2 class="grow">Conversation</h2>
-        <button class="btn ghost" id="mutebtn" onclick="toggleMute()">Mute mic</button></div>
-      <div class="meter" style="margin:10px 0 12px"><i id="lvl"></i></div>
-      <div class="bubble u" id="heard"></div>
-      <div class="bubble r" id="said"></div>
-    </div>
-
-    <div class="card grid-full">
-      <h2>Activity</h2><p class="sub">Recent actions and status updates.</p>
-      <div class="feed" id="feed"><span class="sub">Nothing yet.</span></div>
-    </div>
+    <details class="acc">
+      <summary>Diagnostics</summary>
+      <div><div id="diag"></div></div>
+    </details>
   </div>
-</section>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
 
-<!-- VOICE TAB -->
-<section class="tab" id="t-voice">
-  <div class="grid-2">
-    <div class="card">
-      <h2>Gemini Settings</h2>
-      <label for="key">API key <span id="keystate" style="text-transform:none;font-weight:400"></span></label>
-      <div class="row"><input class="grow" type="password" id="key" placeholder="Paste your key (stored locally on the robot)" autocomplete="off">
-        <button class="btn" onclick="saveKey()">Save key</button></div>
-      <label for="voice">Voice</label><select id="voice"></select>
-      <label for="extra_instructions">About you (optional)</label>
-      <textarea id="extra_instructions" placeholder="e.g. Call me Sam. I like lo-fi when I work."></textarea>
-      <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="saveText()">Save instructions</button></div>
-    </div>
-
-    <div class="card">
-      <h2>Sound &amp; Interaction</h2>
-      <label>Duck level <span style="text-transform:none;font-weight:400">&mdash; music volume while someone talks</span></label>
-      <div class="sl"><input type="range" id="duck_level" min="0" max="1" step="0.01"><output></output></div>
-      <label>Reachy voice loudness</label>
-      <div class="sl"><input type="range" id="voice_gain" min="0.2" max="2.5" step="0.05"><output></output></div>
-      <label>Echo guard <span style="text-transform:none;font-weight:400">&mdash; raise if music interrupts Reachy, lower if it ignores you</span></label>
-      <div class="sl"><input type="range" id="echo_guard" min="0.5" max="5" step="0.1"><output></output></div>
-
-      <div class="sw" style="margin-top:16px">
-        <div><b>Google Search Grounding</b><span>Lets Reachy browse real-time web facts, news, and weather.</span></div>
-        <input type="checkbox" id="web_search">
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- GOOGLE TAB -->
-<section class="tab" id="t-google">
-  <div class="card" id="g-on">
-    <h2>Google Connected</h2><p class="sub" id="g-who"></p>
-    <div class="chips" id="g-svcs" style="margin-bottom:14px"></div>
-    <div id="g-reconnect" class="note bad hide" style="margin-bottom:14px">Google sign-in expired. Connect again below.</div>
-    <p class="sub">Try asking: &ldquo;What&rsquo;s on my calendar tomorrow?&rdquo;, &ldquo;Add dentist Friday at 3&rdquo;, &ldquo;Add milk to my tasks&rdquo;, &ldquo;Check my email&rdquo;</p>
-    <button class="btn danger" onclick="gDisconnect()">Disconnect Google</button>
-  </div>
-
-  <div class="card" id="g-setup">
-    <h2>Connect your Google Account</h2>
-    <p class="sub">Uses your own free Google Desktop App OAuth client. Takes about 5 minutes once.</p>
-    <ol class="steps">
-      <li><div>Open <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noreferrer">Google Cloud &rarr; Clients</a>, make a project, then <b>Create client</b> &rarr; type <b>Desktop app</b>. Enable the Calendar, Tasks and Gmail APIs under <b>APIs &amp; Services</b> if you want those.</div></li>
-      <li><div>On the <b>Audience</b> page add your own Google address as a test user, or press <b>Publish app</b> so the sign-in does not expire after 7 days.</div></li>
-      <li><div>Paste the client ID and secret here:
-        <input type="text" id="gid" placeholder="Client ID" style="margin-top:8px" autocomplete="off">
-        <input type="password" id="gsec" placeholder="Client secret" style="margin-top:8px" autocomplete="off">
-        <div id="g-saved" class="sub hide" style="margin-top:6px"></div></div></li>
-      <li><div>Choose what Reachy may access:
-        <div id="g-pick" class="chips" style="margin-top:8px"></div></div></li>
-      <li><div><button class="btn" onclick="gStart()">Connect Google</button>
-        <div class="sub" style="margin-top:6px">A Google authorization tab will open. Approve it. The next page will say it cannot be reached (that is expected!).</div></div></li>
-      <li><div>Copy the <b>entire URL</b> from that browser address bar and paste it here:
-        <input type="text" id="gurl" placeholder="http://localhost:8765/?state=...&code=..." style="margin-top:8px" autocomplete="off">
-        <div style="margin-top:10px"><button class="btn" onclick="gFinish()">Finish Connection</button></div></div></li>
-    </ol>
-    <div id="g-err" class="note bad hide"></div>
-    <p class="sub" style="margin-top:12px">Gmail access is strictly read-only. Reachy can add calendar events and tasks, but never deletes anything.</p>
-  </div>
-</section>
-
-<!-- ROBOT TAB -->
-<section class="tab" id="t-robot">
-  <div class="grid-2">
-    <div class="card">
-      <h2>Movement Controls</h2>
-      <div class="sw"><div><b>Enable Robot Movement</b><span>Allow built-in head moves, emotions, and gestures.</span></div><input type="checkbox" id="motion_enabled"></div>
-      <div class="sw"><div><b>Be Expressive</b><span>Reachy automatically adds subtle head gestures while chatting.</span></div><input type="checkbox" id="expressive"></div>
-      <div class="sw"><div><b>Allow Dancing</b><span>Allow full dance moves. When off, Reachy stays expressive without dancing.</span></div><input type="checkbox" id="dance_enabled"></div>
-      <div id="mo-note" class="note hide" style="margin-top:12px"></div>
-    </div>
-
-    <div class="card">
-      <h2>Look Around</h2>
-      <p class="sub">Direct manual head steering.</p>
-      <div class="pad">
-        <button class="u" onclick="mv('head','up')">&#9650;</button>
-        <button class="l" onclick="mv('head','left')">&#9664;</button>
-        <button class="f" onclick="mv('head','front')">&#9679;</button>
-        <button class="r" onclick="mv('head','right')">&#9654;</button>
-        <button class="d" onclick="mv('head','down')">&#9660;</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Try an Emotion</h2>
-      <p class="sub">Pollen's official emotion move library.</p>
-      <div class="chips" id="emos"></div>
-    </div>
-
-    <div class="card">
-      <h2>Dance Routines</h2>
-      <p class="sub">Built-in rhythmic dance sequences.</p>
-      <div class="chips" id="dances">
-        <button class="chip" onclick="mv('dance','')">&#127922; Surprise me</button>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ADVANCED TAB -->
-<section class="tab" id="t-adv">
-  <div class="grid-2">
-    <div class="card">
-      <h2>Gemini Model Configuration</h2>
-      <p class="sub">Leave this default unless Google retires the model. Reachy automatically falls back if needed.</p>
-      <input type="text" id="model" autocomplete="off">
-      <div class="row" style="margin-top:12px"><button class="btn ghost" onclick="saveText()">Save model</button></div>
-      <p class="sub" id="curmodel" style="margin-top:10px"></p>
-    </div>
-
-    <div class="card">
-      <h2>Session Controls</h2>
-      <p class="sub">Reset active dialogue context if Gemini gets stuck.</p>
-      <button class="btn ghost" onclick="newConv()">Start fresh conversation</button>
-    </div>
-
-    <div class="card grid-full">
-      <h2>System Diagnostics</h2>
-      <div id="diag" class="sub" style="font-family:monospace;font-size:13px;line-height:1.6"></div>
-    </div>
-  </div>
-</section>
-
-</div></main>
-<div id="toast"></div>
-
-<script>
-const $ = id => document.getElementById(id);
-let S = null, picking = null, muted = false, gSel = {calendar:true, tasks:true, gmail:false};
-
-async function api(path, body){
-  const r = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if(!r.ok) throw new Error(r.status); return r.json();
-}
-function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>e.classList.remove('on'),2400)}
-function go(t){document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x.id==='t-'+t));
-  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));
-  if(t==='robot')loadMoves(); window.scrollTo({top:0,behavior:'smooth'})}
-document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.t));
-
-const act = a => api('/api/music/'+a,{}).then(poll);
-function playTrack(){
-  const el=$('track_q'), q=el.value.trim();
-  if(!q) return;
-  api('/api/music/play',{query:q}).then(r=>{
-    el.value='';
-    toast(r.result||'Queued');
-    poll();
-  });
-}
-const newConv = () => api('/api/new_conversation',{}).then(()=>toast('Fresh conversation started'));
-function toggleMute(){api('/api/mute',{muted:!muted}).then(poll)}
-function saveKey(){const v=$('key').value.trim(); if(!v)return toast('Paste a key first');
-  api('/api/config',{api_key:v}).then(()=>{$('key').value='';toast('Key saved');poll()})}
-function saveText(){api('/api/config',{extra_instructions:$('extra_instructions').value,model:$('model').value}).then(()=>toast('Saved'))}
-
-/* sliders and switches auto-save */
-const SL={music_volume:v=>Math.round(v*100)+'%',duck_level:v=>Math.round(v*100)+'%',voice_gain:v=>v.toFixed(2)+'x',echo_guard:v=>(+v).toFixed(1)};
-Object.keys(SL).forEach(id=>{const el=$(id),out=el.parentNode.querySelector('output');
-  el.addEventListener('input',()=>{picking=id;out.textContent=SL[id](+el.value)});
-  el.addEventListener('change',()=>api('/api/config',{[id]:+el.value}).then(()=>{picking=null}))});
-['web_search','motion_enabled','expressive','dance_enabled'].forEach(id=>$(id).addEventListener('change',e=>
-  api('/api/config',{[id]:e.target.checked}).then(()=>toast('Saved'))));
-$('voice').addEventListener('change',e=>api('/api/config',{voice:e.target.value}).then(()=>toast('Voice changed')));
-
-/* robot */
-let movesLoaded=false;
-async function loadMoves(){ try{ const m=await api('/api/robot/moves');
-  $('emos').replaceChildren(...m.emotions.filter(e=>e!=='random').map(e=>chip(e.replace(/_/g,' '),()=>mv('emotion',e))));
-  const d=$('dances'); d.replaceChildren(chip('\u{1F3B2} Surprise me',()=>mv('dance','')),...m.dances.map(n=>chip(n.replace(/_/g,' '),()=>mv('dance',n))));
-  if(!m.dances.length&&!m.status.dances_ready){const p=document.createElement('span');p.className='sub';p.textContent=' Loading the dance library\u2026';d.append(p)}
-  }catch(e){} }
-function chip(t,f){const b=document.createElement('button');b.className='chip';b.textContent=t;b.onclick=f;return b}
-async function mv(kind,value){ try{const r=await api('/api/robot/move',{kind,value}); toast(r.ok?('Reachy: '+r.result):r.error)}catch(e){toast('Could not reach the app')} }
-
-/* google */
-function renderGoogle(g){
-  $('g-on').classList.toggle('hide',!g.connected); $('g-setup').classList.toggle('hide',g.connected&&!g.needs_reconnect);
-  $('g-reconnect').classList.toggle('hide',!g.needs_reconnect);
-  $('g-who').textContent=g.email?('Signed in as '+g.email):'Signed in';
-  $('g-svcs').replaceChildren(...g.services.map(s=>{const c=document.createElement('span');c.className='chip';c.textContent='\u2713 '+g.available[s];return c}));
-  const sv=$('g-saved'); sv.classList.toggle('hide',!g.client_set); sv.textContent=g.client_set?('Saved client '+g.client_id_hint+'\u2026 (paste again to replace)'):'';
-  const pick=$('g-pick'); if(!pick.children.length||pick.dataset.n!==String(Object.keys(g.available).length)){
-    pick.dataset.n=String(Object.keys(g.available).length);
-    pick.replaceChildren(...Object.entries(g.available).map(([k,label])=>{const b=document.createElement('button');b.className='chip';
-      const paint=()=>{b.textContent=(gSel[k]?'\u2713 ':'')+label;b.style.borderColor=gSel[k]?'var(--accent)':'';b.style.background=gSel[k]?'var(--soft)':''};
-      b.onclick=()=>{gSel[k]=!gSel[k];paint()};paint();return b}))}
-}
-function gErr(t){const e=$('g-err');e.textContent=t||'';e.classList.toggle('hide',!t)}
-async function gStart(){ gErr('');
-  const id=$('gid').value.trim(), sec=$('gsec').value.trim();
-  if(id||sec){const r=await api('/api/google/client',{client_id:id,client_secret:sec}); if(!r.ok)return gErr(r.error)}
-  const svc=Object.keys(gSel).filter(k=>gSel[k]); if(!svc.length)return gErr('Pick at least one thing to connect.');
-  const r=await api('/api/google/start',{services:svc}); if(!r.ok)return gErr(r.error);
-  window.open(r.url,'_blank','noopener'); toast('Approve in the Google tab, then come back'); $('gurl').focus() }
-async function gFinish(){ gErr(''); const u=$('gurl').value.trim(); if(!u)return gErr('Paste the address first.');
-  const r=await api('/api/google/finish',{redirect_url:u}); if(!r.ok)return gErr(r.error);
-  $('gurl').value='';$('gid').value='';$('gsec').value='';toast('Google connected');poll() }
-async function gDisconnect(){ if(!confirm('Disconnect Google from Reachy?'))return; await api('/api/google/disconnect',{}); poll() }
-
-/* polling */
-const STATES={listening:['ok','Listening'],connecting:['warn','Connecting\u2026'],error:['bad','Problem'],needs_key:['warn','Needs API key'],starting:['warn','Starting\u2026']};
-async function poll(){
-  try{ S=await api('/api/state') }catch(e){ $('gdot').className='dot bad'; $('gstate').textContent='waiting for the app\u2026'; return }
-  const [cls,txt]=STATES[S.gemini]||['warn',S.gemini]; $('gdot').className='dot '+cls; $('gstate').textContent=txt;
-  $('ver').textContent='v'+(S.version||''); const c=S.config;
-  document.querySelectorAll('input[type=range]').forEach(el=>{ if(picking===el.id||!(el.id in c))return; el.value=c[el.id];
-    const o=el.parentNode.querySelector('output'); if(o)o.textContent=SL[el.id](+c[el.id]) });
-  ['web_search','motion_enabled','expressive','dance_enabled'].forEach(id=>$(id).checked=!!c[id]);
-  const vs=$('voice'); if(!vs.options.length){S.voices.forEach(v=>vs.add(new Option(v,v)))} if(document.activeElement!==vs)vs.value=c.voice;
-  [['extra_instructions',c.extra_instructions],['model',c.model]].forEach(([id,v])=>{if(document.activeElement!==$(id))$(id).value=v||''});
-  $('keystate').textContent=c.api_key_set?'\u2713 saved':'\u26A0 not set'; $('keystate').style.color=c.api_key_set?'var(--ok)':'var(--warn)';
-  $('curmodel').textContent='Using '+S.model;
-
-  /* setup checklist */
-  const k=c.api_key_set, said=!!(S.heard||S.music.track), g=S.google.connected;
-  $('s1').classList.toggle('done',k); $('s2').classList.toggle('done',said); $('s3').classList.toggle('done',g);
-  $('setup').classList.toggle('hide',k&&said&&g);
-
-  /* music */
-  const m=S.music, idle=m.state==='idle';
-  $('trk').textContent=idle?'Nothing playing':(m.track||'Loading\u2026'); $('art').textContent=idle?'Ask Reachy for some music':
-    (m.artist||'')+(m.state==='paused'?' \u00B7 paused':'')+(m.queued?` \u00B7 ${m.queued} up next`:'');
-  $('prog').style.width=(m.duration?Math.min(100,100*m.elapsed/m.duration):0)+'%';
-  const me=$('merr'); me.textContent=m.error||''; me.classList.toggle('hide',!m.error);
-
-  /* conversation */
-  muted=S.muted; $('mutebtn').textContent=muted?'Unmute mic':'Mute mic'; $('lvl').style.width=Math.min(100,S.mic_level*900)+'%';
-  $('heard').textContent=S.heard||''; $('said').textContent=S.said||'';
-  const f=$('feed'); f.replaceChildren(...(S.events.length?S.events.map(e=>{const d=document.createElement('div');if(e.kind==='error')d.className='error';
-    const t=document.createElement('time');t.textContent=e.t;const x=document.createElement('span');x.textContent=e.text;d.append(t,x);return d}):
-    [Object.assign(document.createElement('span'),{className:'sub',textContent:'Nothing yet.'})]));
-  renderGoogle(S.google);
-
-  /* robot note */
-  const mo=S.motion, n=$('mo-note'); const bad=!mo.emotions_ready&&mo.error;
-  n.classList.toggle('hide',!(bad||(c.motion_enabled&&!mo.emotions_ready))); n.className='note '+(bad?'bad':'')+(n.classList.contains('hide')?' hide':'');
-  n.textContent=bad?('Move library problem: '+mo.error):'Downloading the built-in move library (small, one time)\u2026';
-
-  /* diagnostics */
-  $('diag').textContent=`Gemini: ${S.gemini}${S.error?' ('+S.error+')':''} \u00B7 Audio decoder: ${S.ffmpeg?'ready':'missing'} \u00B7 Emotions: ${mo.emotions_ready?'ready':'loading'} \u00B7 Dances: ${mo.dances_ready?'ready':'loading'}`;
-  if($('t-robot').classList.contains('on')&&!movesLoaded&&mo.dances_ready){movesLoaded=true;loadMoves()}
-}
-poll(); setInterval(poll,1000);
-</script>
+<script src="/static/controller.js"></script>
+<link rel="stylesheet" href="/static/settings.css">
+<script src="/static/robot.js" defer></script>
+<script src="/static/settings.js" defer></script>
 </body>
 </html>
