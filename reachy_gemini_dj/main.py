@@ -20,11 +20,13 @@ from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
 
 from .audio import AudioPipeline
+from .backends import VoiceBackend
 from .config import Config
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
 from .music import MusicPlayer
+from .remote_session import RemoteSession
 
 log = logging.getLogger("reachy_gemini_dj")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -45,6 +47,12 @@ class ConfigUpdate(BaseModel):
     motion_enabled: bool | None = None
     expressive: bool | None = None
     dance_enabled: bool | None = None
+    backend: str | None = None
+    brain_url: str | None = None
+    allow_gemini_assist: bool | None = None
+
+
+VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
 
 
 class MuteUpdate(BaseModel):
@@ -97,9 +105,31 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_heard=self._set_heard,
             on_said=self._set_said,
         )
+        self._mini: ReachyMini | None = None
+        self.local_session = RemoteSession(
+            config=self.config,
+            execute_tool=self.gemini_session.execute_tool,
+            on_event=self.record_event,
+            on_voice_chunk=lambda chunk: self.audio_pipe.play_voice(chunk) if self.audio_pipe else None,
+            on_barge_in=lambda: self.audio_pipe.clear_voice() if self.audio_pipe else None,
+            on_heard=self._set_heard,
+            on_said=self._set_said,
+            is_speaking=lambda: bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
+            get_frame=self._get_frame,
+        )
+        # Local brain first, Gemini Live as fallback (see backends.py); both share execute_tool.
+        self.voice = VoiceBackend(
+            self.config, self.local_session, self.gemini_session, self.record_event,
+            is_idle=lambda: not (self.audio_pipe and (self.audio_pipe._is_robot_speaking or self.audio_pipe._user_speaking)),
+        )
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
+
+    def _get_frame(self):
+        media = getattr(self._mini, "media", None)
+        fn = getattr(media, "get_frame", None)
+        return fn() if callable(fn) else None
 
     def _set_heard(self, text: str) -> None:
         self.heard_text = (self.heard_text + " " + text).strip()[-300:]
@@ -126,8 +156,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         @app.get("/api/state")
         def get_state():
-            g_state = self.gemini_session.state if self.gemini_session else "starting"
-            g_err = self.gemini_session.last_error if self.gemini_session else ""
+            g_state = self.voice.state
+            g_err = self.voice.last_error
             m_status = (
                 self.motion.status()
                 if self.motion
@@ -152,6 +182,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 "said": self.said_text,
                 "ffmpeg": bool(shutil.which("ffmpeg")),
                 "voices": VOICES,
+                "active_backend": self.voice.active_name,
+                "brain": self.voice.status(),
                 "config": {
                     "api_key_set": bool(self.config.api_key),
                     "model": self.config.model,
@@ -165,6 +197,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "motion_enabled": self.config.motion_enabled,
                     "expressive": self.config.expressive,
                     "dance_enabled": self.config.dance_enabled,
+                    "backend": self.config.backend,
+                    "brain_url": self.config.brain_url,
+                    "allow_gemini_assist": self.config.allow_gemini_assist,
                 },
                 "music": self.music.get_status(),
                 "google": self.google_account.public(),
@@ -180,8 +215,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
-            if "api_key" in d and self.gemini_session:
-                self.gemini_session.init_client()
+            if VOICE_KEYS & d.keys():
+                self.voice.init_client()
             return {"ok": True}
 
         @app.post("/api/mute")
@@ -195,8 +230,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         def new_conversation():
             self.heard_text = ""
             self.said_text = ""
-            if self.gemini_session:
-                self.gemini_session.init_client()
+            self.voice.init_client()
             return {"ok": True}
 
         # Music endpoints
@@ -290,7 +324,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
             enabled=lambda: self.config.motion_enabled,
             dance_enabled=lambda: self.config.dance_enabled,
         )
-        self.gemini_session.motion = self.motion
+        self.voice.motion = self.motion
+        self._mini = reachy_mini
 
         self.audio_pipe = AudioPipeline(
             mini=reachy_mini,
@@ -298,12 +333,12 @@ class ReachyGeminiDJ(ReachyMiniApp):
             config=self.config,
             music=self.music,
             on_level=lambda lvl: setattr(self, "mic_level", lvl),
-            on_pcm_chunk=self.gemini_session.push_mic,
+            on_pcm_chunk=self.voice.push_mic,
         )
 
         # Start background pipelines
         self.audio_pipe.start()
-        self.gemini_session.start()
+        self.voice.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
@@ -318,8 +353,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 time.sleep(1.0)
 
         log.info("Stopping Reachy Gemini DJ...")
-        if self.gemini_session:
-            self.gemini_session.stop()
+        self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()
         self.music.stop()

@@ -17,7 +17,25 @@ dependencies = [
     "pydantic>=2.0.0",
     "yt-dlp>=2024.0.0",
     "numpy",
+    "websockets>=12.0",
 ]
+
+[project.optional-dependencies]
+# Install on the laptop / Mac mini that runs the local "brain" (not on the robot):  pip install ".[brain]"
+brain = [
+    "websockets>=12.0",
+    "httpx>=0.25",
+    "numpy",
+    "faster-whisper>=1.0",
+    "pocket-tts",
+    "webrtcvad-wheels",
+    "ddgs",
+    "google-genai>=0.1.0",
+]
+test = ["pytest"]
+
+[project.scripts]
+reachy-brain = "reachy_brain.server:main"
 
 [project.entry-points."reachy_mini_apps"]
 reachy_gemini_dj = "reachy_gemini_dj.main:ReachyGeminiDJ"
@@ -27,7 +45,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["reachy_gemini_dj*"]
+include = ["reachy_gemini_dj*", "reachy_brain*"]
 
 [tool.setuptools.package-data]
 reachy_gemini_dj = [

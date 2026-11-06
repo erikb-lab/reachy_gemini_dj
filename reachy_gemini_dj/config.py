@@ -27,6 +27,10 @@ class Config:
     motion_enabled: bool = True
     expressive: bool = True
     dance_enabled: bool = False
+    # Voice backend: "auto" = local brain first, Gemini Live if it fails; "local"; "gemini"
+    backend: str = "auto"
+    brain_url: str = "ws://127.0.0.1:8765"
+    allow_gemini_assist: bool = True
 
     @property
     def effective_model(self) -> str:
@@ -52,6 +56,8 @@ class Config:
         env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if env_key:
             cfg.api_key = env_key.strip()
+        if os.environ.get("BRAIN_URL"):
+            cfg.brain_url = os.environ["BRAIN_URL"].strip()
 
         if CONFIG_FILE.exists():
             try:
