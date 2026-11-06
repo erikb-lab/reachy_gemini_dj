@@ -56,3 +56,39 @@ uv pip install git+https://huggingface.co/spaces/sillymastermind/reachy_gemini_d
 2. Enter your [Google AI Studio Gemini API Key](https://aistudio.google.com/apikey).
 3. Connect your Google account under the **Google** tab (optional).
 4. Start talking: *"Reachy, play some chill lofi beats"*, *"What's on my calendar tomorrow?"*, or *"Show me a dance!"*
+
+---
+
+## Free local voice (brain server)
+
+The robot's CM4 is too small for speech recognition and a language model, so the free voice runs on a
+computer on the same network (a laptop or Mac mini). The robot app stays light and streams mic audio to it.
+
+```
+Reachy Mini (CM4)                               Brain computer (laptop / Mac mini)
+ app: mic, speaker, motion, music, Google  <-WebSocket->  VAD -> Whisper STT -> llama-server LLM -> Pocket TTS
+ runs music/motion/calendar tools                         runs web search, weather, camera reading, Gemini help
+```
+
+**Backend modes** (Settings, *Voice backend*):
+- **Auto** (default): local brain first. If it is unreachable at start or fails 3 times in a row, the app
+  switches to Gemini Live (needs an API key) and switches back when the brain is reachable and the robot is idle.
+- **Local only** / **Gemini only**.
+- **Gemini for hard questions**: with an API key set, the local model can hand hard questions (maths, code,
+  long explanations) to Gemini; the answer is still spoken by the local voice. Say "ask Gemini ..." to force it.
+
+### Brain setup
+1. Install: `pip install "reachy_gemini_dj[brain] @ git+https://github.com/erikb-lab/reachy_gemini_dj"`
+   (or `pip install ".[brain]"` from a clone). `ffmpeg` is not needed on the brain.
+2. Get [llama.cpp](https://github.com/ggml-org/llama.cpp/releases) `llama-server`, and a GGUF model with tool
+   calling (tested: Groot-19B-A3B Q4_K_M, plus its `mmproj` file for camera questions).
+3. Run:
+   ```bash
+   reachy-brain --llama-server-bin /path/to/llama-server --model /path/to/model.gguf --mmproj /path/to/mmproj.gguf
+   ```
+   It listens on `ws://0.0.0.0:8765`. Useful flags: `--llm-threads 4`, `--tts-voice alba`,
+   `--llama-url http://host:port` to use a llama-server you already run, `--gemini-key` for Gemini help.
+4. In the robot's web UI set **Brain URL** to `ws://<brain-computer-ip>:8765`.
+
+On a CPU-only laptop expect roughly 4-5 s to first spoken word for chat, about 13-15 s for music or weather,
+and about 25 s when a web search is needed.
