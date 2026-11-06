@@ -10,3 +10,4 @@ build/
 TRANSFER.md
 TRANSFER*.md
 
+.venv-test/
