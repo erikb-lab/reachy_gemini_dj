@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Any
 
+from . import gain as _gain
+
 log = logging.getLogger(__name__)
 
 
@@ -27,7 +29,8 @@ def _clean_err(e: BaseException) -> str:
 
 class MusicPlayer:
     def __init__(self, volume: float = 0.70):
-        self._volume = max(0.0, min(1.0, float(volume)))
+        # Linear multiplier, 0.0-2.5 (see gain.py for the scale); duck is 0.0-1.0.
+        self._volume = _gain.clamp_volume(volume)
         self._duck_factor = 1.0
         self._state = "idle"  # 'idle', 'playing', 'paused', 'loading'
         self._current_track = ""
@@ -73,12 +76,19 @@ class MusicPlayer:
             }
 
     def set_volume(self, volume: float) -> None:
+        """Set music volume (linear multiplier 0.0-2.5); applied live, ramped smoothly."""
         with self._lock:
-            self._volume = max(0.0, min(3.0, float(volume)))
+            self._volume = _gain.clamp_volume(volume)
 
     def set_duck(self, duck_level: float) -> None:
+        """Duck music to this fraction (0.0-1.0) of volume; fades in over ~80 ms."""
         with self._lock:
-            self._duck_factor = max(0.0, min(1.0, float(duck_level)))
+            self._duck_factor = _gain.clamp_duck(duck_level)
+
+    def _target_gain(self) -> float:
+        """Total gain the audio pump should be heading towards (volume * duck)."""
+        with self._lock:
+            return self._volume * self._duck_factor
 
     def reset_duck(self) -> None:
         with self._lock:
@@ -277,48 +287,63 @@ class MusicPlayer:
             self._elapsed_paused = 0.0
             self._state = "playing"
 
-            effective_vol = self._volume * self._duck_factor
-            header_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items()) if headers else ""
-            cmd = [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel",
-                "warning",
-            ]
-            if effective_vol > 1.0:
-                cmd += ["-volume", "100", "-af", f"volume={effective_vol:.2f}"]
-            else:
-                cmd += ["-volume", str(int(effective_vol * 100))]
-
-            if header_str:
-                cmd += ["-headers", header_str]
-            cmd += [
-                "-reconnect",
-                "1",
-                "-reconnect_streamed",
-                "1",
-                "-reconnect_delay_max",
-                "5",
-                stream_url,
-            ]
-            log.info("Starting ffplay for %s (vol=%.2fx)", title, effective_vol)
+            # Decode with ffmpeg to raw PCM, apply live gain in-process, play via
+            # ffplay reading stdin. Volume/duck changes therefore act mid-track.
+            # Streaming only: nothing is written to disk.
+            decoder = None
             try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                decoder = subprocess.Popen(
+                    _gain.decoder_command(stream_url, headers),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # loglevel warning: little output
+                )
+                _gain.shrink_pipe(decoder.stdout, 16384)
+                proc = subprocess.Popen(
+                    _gain.sink_command(), stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,  # binary stdin: raw PCM
+                )
             except Exception as e:
+                if decoder is not None:
+                    try:
+                        decoder.kill()
+                    except Exception:
+                        pass
                 self._state = "idle"
                 self._clear_track()
-                self._error = f"Couldn't start ffplay: {_clean_err(e)}"
+                self._error = f"Couldn't start ffmpeg/ffplay: {_clean_err(e)}"
                 return
             self._proc = proc
+            _gain.shrink_pipe(proc.stdin, 16384)
+            # lock is held here: pass the initial gain explicitly (get_target re-locks)
+            pump = _gain.GainPump(
+                decoder.stdout, proc.stdin, self._target_gain,
+                initial_gain=self._volume * self._duck_factor,
+            )
+            log.info("Starting playback for %s (gain=%.2fx)", title, pump.gain)
+        pump_thread = threading.Thread(target=pump.run, daemon=True, name="music-gain")
+        pump_thread.start()
 
         err = ""
         try:
-            _, err = proc.communicate()
+            err = proc.stderr.read().decode("utf-8", "replace")
+            proc.wait()
+            if err and "error" in err.lower():
+                log.warning("ffplay note: %s", err[:200])
         except Exception:
             pass
-        if err and "error" in err.lower():
-            log.warning("ffplay note: %s", err[:200])
+        decoder_rc = decoder.poll()          # None: still running (sink ended or was stopped first)
+        try:
+            decoder.kill()
+            decoder.wait(timeout=1.0)
+        except Exception:
+            pass
+        if decoder_rc not in (0, None):
+            try:
+                derr = decoder.stderr.read().decode("utf-8", "replace").strip()
+            except Exception:
+                derr = ""
+            err = (err + "\n" + derr).strip() if derr else (err or f"ffmpeg exited with code {decoder_rc}")
+            if proc.returncode == 0:
+                proc.returncode = decoder_rc  # report it below as a failed track
 
         with self._lock:
             if self._proc is proc:

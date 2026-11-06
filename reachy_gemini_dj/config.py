@@ -19,8 +19,8 @@ class Config:
     model: str = "gemini-2.5-flash-native-audio-latest"
     voice: str = "Puck"
     extra_instructions: str = ""
-    music_volume: float = 2.00
-    duck_level: float = 0.20
+    music_volume: float = 2.00  # linear gain 0.0-2.5 (1.0 = unity, 2.0 = 200%); see gain.py
+    duck_level: float = 0.20  # fraction 0.0-1.0 of music_volume while someone talks
     voice_gain: float = 1.50
     echo_guard: float = 1.50
     web_search: bool = False

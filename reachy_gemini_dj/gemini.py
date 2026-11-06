@@ -15,6 +15,8 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
+from .gain import percent_to_volume, volume_to_percent
+
 log = logging.getLogger(__name__)
 
 VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
@@ -69,10 +71,10 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         ),
         types.FunctionDeclaration(
             name="set_volume",
-            description="Set music volume (0-100 percent).",
+            description="Set music volume in percent: 100 is normal level, 0 is silent, up to 250 is a boost.",
             parameters=types.Schema(
                 type="OBJECT",
-                properties={"volume": types.Schema(type="INTEGER", description="Volume level from 0 to 100.")},
+                properties={"volume": types.Schema(type="INTEGER", description="Volume percent from 0 to 250 (100 = normal).")},
                 required=["volume"],
             ),
         ),
@@ -421,10 +423,11 @@ class GeminiSession:
             elif name == "stop_music":
                 return self.music.stop()
             elif name == "set_volume":
-                vol = max(0, min(100, int(args.get("volume", 70)))) / 100.0
+                # Tool takes percent (100 = unity, up to 250 = boost); see gain.py.
+                vol = percent_to_volume(args.get("volume", 70))
                 self.config.music_volume = vol
                 self.music.set_volume(vol)
-                return {"result": f"Volume set to {int(vol * 100)}%"}
+                return {"result": f"Volume set to {volume_to_percent(vol)}%"}
 
             # Motion
             elif name == "robot_emotion":

@@ -11,12 +11,33 @@ from reachy_gemini_dj import music as music_mod
 from reachy_gemini_dj.music import MusicPlayer
 
 
+class _Sink:
+    def write(self, b): return len(b)
+    def flush(self): pass
+    def close(self): pass
+    def fileno(self): raise OSError("fake")
+
+
+class FakeDecoder:
+    def __init__(self, rc=0, err=b""):
+        import io
+        self.stdout = io.BytesIO(b"")
+        self.stderr = io.BytesIO(err)
+        self.rc = rc
+        self.returncode = None
+    def poll(self): return self.rc
+    def kill(self): self.returncode = self.rc if self.rc is not None else -9
+    def wait(self, timeout=None): return self.returncode
+
+
 class FakeProc:
     def __init__(self, run_for=None, returncode=0, stderr=""):
         self._done = threading.Event()
         self._rc = returncode
         self.returncode = None
-        self.stderr = stderr
+        self._stderr = stderr.encode() if isinstance(stderr, str) else stderr
+        self.stderr = types.SimpleNamespace(read=self._read_err)
+        self.stdin = _Sink()
         self.signals = []
         self.stopped = False
         if run_for is not None:
@@ -51,6 +72,10 @@ class FakeProc:
         if not self._done.wait(timeout):
             raise subprocess.TimeoutExpired("ffplay", timeout)
         return self.returncode
+
+    def _read_err(self):
+        self._done.wait()
+        return self._stderr
 
     def communicate(self):
         self._done.wait()
@@ -93,13 +118,22 @@ def env(monkeypatch):
     monkeypatch.setitem(sys.modules, "yt_dlp", types.SimpleNamespace(YoutubeDL=FakeYDL))
     ydl.next_proc = lambda: FakeProc()
 
+    ydl.decoders = []
+    ydl.decoder_rc, ydl.decoder_err = 0, b""
+
     def popen(cmd, **kw):
+        if cmd[0] == "ffmpeg":
+            d = FakeDecoder(ydl.decoder_rc, ydl.decoder_err)
+            d.cmd = cmd
+            ydl.decoders.append(d)
+            return d
         p = ydl.next_proc()
         p.cmd = cmd
         procs.append(p)
         return p
 
     monkeypatch.setattr(music_mod.subprocess, "Popen", popen)
+    monkeypatch.setattr(music_mod._gain, "_ffplay_major", lambda: 8)
     ydl.procs = procs
     ydl.info = lambda q: {"url": "http://s/" + q, "title": q, "uploader": "u", "duration": 100}
     players = []
@@ -126,7 +160,8 @@ def test_streams_not_downloads(env):
     p.play("song")
     assert wait_for(lambda: p.get_status()["state"] == "playing")
     assert env.calls == [("song", False)]
-    assert env.procs[0].cmd[-1] == "http://s/song"
+    assert "http://s/song" in env.decoders[0].cmd          # ffmpeg reads the stream URL directly
+    assert env.procs[0].cmd[-1] == "pipe:0"                 # ffplay only plays piped PCM
 
 
 def test_natural_end_advances_queue(env):
@@ -180,7 +215,7 @@ def test_format_fallback_url(env):
     p = env.make()
     p.play("q")
     assert wait_for(lambda: env.procs)
-    assert env.procs[0].cmd[-1] == "http://a"
+    assert "http://a" in env.decoders[0].cmd
 
 
 def test_pause_resume_signals_and_elapsed(env):
@@ -292,3 +327,12 @@ def test_elapsed_clamped_to_duration(env):
     assert wait_for(lambda: p.get_status()["state"] == "playing")
     time.sleep(0.2)
     assert p.get_status()["elapsed"] <= 0.05
+
+
+def test_decoder_failure_reports_error(env):
+    env.decoder_rc, env.decoder_err = 8, b"Server returned 403 Forbidden"
+    env.next_proc = lambda: FakeProc(run_for=0.05, returncode=0)
+    p = env.make()
+    p.play("a")
+    assert wait_for(lambda: "403" in p.get_status()["error"])
+    assert p.get_status()["state"] == "idle"
