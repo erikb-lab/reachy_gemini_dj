@@ -175,7 +175,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {
                 "version": "0.3.0",
                 "gemini": g_state,
-                "model": self.config.model,
+                "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
                 "muted": self.muted,
                 "mic_level": self.mic_level,

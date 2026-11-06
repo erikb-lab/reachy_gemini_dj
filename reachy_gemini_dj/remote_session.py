@@ -150,7 +150,8 @@ class RemoteSession:
                             t.cancel()
                         await asyncio.gather(*tasks, return_exceptions=True)
             except Exception as e:
-                self.consecutive_failures += 1
+                if self.last_connect_ok:          # a drop after we had a brain; startup is handled by the grace rule
+                    self.consecutive_failures += 1
                 self.last_error = f"brain: {type(e).__name__}: {e}"
                 self.state = "error"
                 log.warning("Brain connection problem: %s", e)

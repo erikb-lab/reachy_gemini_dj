@@ -1,10 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <title>Reachy Gemini DJ</title>
+<script>
+  // Theme: "dark" (default), "light" or "auto" (follow the device). Remembered per browser.
+  try { var t = localStorage.getItem("reachy-theme"); if (t === "light" || t === "auto" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="stylesheet" href="/static/controller.css">
 </head>
 <body>
@@ -15,6 +19,7 @@
     <span class="stat" id="st-backend" title="Gemini backend state"><span class="dot"></span><span>backend</span></span>
     <span class="stat" id="st-model" title="Model in use"><span>model: &hellip;</span></span>
     <span class="stat hide" id="st-err" title="Last error"><span class="dot bad"></span><span></span></span>
+    <button id="theme-btn" type="button" aria-label="Color theme"></button>
   </div>
   <div id="banner" class="hide" role="status"></div>
 </header>
@@ -163,5 +168,19 @@
 <link rel="stylesheet" href="/static/settings.css">
 <script src="/static/robot.js" defer></script>
 <script src="/static/settings.js" defer></script>
+<script>
+(function () {
+  var order = ["dark", "light", "auto"], names = {dark: "\u263E Dark", light: "\u2600 Light", auto: "\u25D0 Auto"};
+  var btn = document.getElementById("theme-btn"), root = document.documentElement;
+  function show() { var t = root.dataset.theme || "dark"; btn.textContent = names[t]; btn.title = "Theme: " + t + " (click to change)"; }
+  btn.addEventListener("click", function () {
+    var t = order[(order.indexOf(root.dataset.theme || "dark") + 1) % order.length];
+    root.dataset.theme = t;
+    try { localStorage.setItem("reachy-theme", t); } catch (e) {}
+    show();
+  });
+  show();
+})();
+</script>
 </body>
 </html>

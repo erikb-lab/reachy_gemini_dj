@@ -1,29 +1,17 @@
 /* Styles for #robot-panel and #settings-panel. Inherit host theme via CSS variables. */
 #robot-panel, #settings-panel {
   --p-bg: var(--bg, #f6f7f9);
-  --p-fg: var(--fg, #1b1e24);
+  --p-fg: var(--ink, #1b1e24);
   --p-card: var(--card, #ffffff);
   --p-accent: var(--accent, #3b6cff);
-  --p-muted: var(--muted, #626b7a);
-  --p-border: var(--border, #d9dde4);
-  --p-ok: #1f8f4e;
-  --p-bad: #c93636;
+  --p-muted: var(--mut, #626b7a);
+  --p-border: var(--line, #d9dde4);
+  --p-ok: var(--ok, #1f8f4e);
+  --p-bad: var(--bad, #c93636);
   color: var(--p-fg);
   font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   box-sizing: border-box;
   display: block;
-}
-@media (prefers-color-scheme: dark) {
-  #robot-panel, #settings-panel {
-    --p-bg: var(--bg, #14161a);
-    --p-fg: var(--fg, #e8eaee);
-    --p-card: var(--card, #1d2026);
-    --p-accent: var(--accent, #7d9bff);
-    --p-muted: var(--muted, #9aa3b2);
-    --p-border: var(--border, #343944);
-    --p-ok: #4cc380;
-    --p-bad: #ff7b7b;
-  }
 }
 #robot-panel *, #settings-panel * { box-sizing: border-box; }
 

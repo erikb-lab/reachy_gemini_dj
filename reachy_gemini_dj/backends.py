@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 log = logging.getLogger(__name__)
 
 FAIL_LIMIT = 3
-START_GRACE_S = 20.0
+START_GRACE_S = 30.0
 RETRY_LOCAL_EVERY_S = 300.0
 
 
@@ -55,7 +55,10 @@ class VoiceBackend:
 
     @property
     def last_error(self) -> str:
-        return (self.active.last_error if self.active else "") or self.reason
+        err = self.active.last_error if self.active else ""
+        if not err and self.reason.endswith("(no Gemini key for fallback)"):
+            err = self.reason                   # a real problem the user can fix, not just why we switched
+        return err
 
     @property
     def active_name(self) -> str:
