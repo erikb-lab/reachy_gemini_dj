@@ -123,6 +123,41 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 required=["name"],
             ),
         ),
+        # FRC (FIRST Robotics Competition) tools: QR scan, FRC Nexus queuing, The Blue Alliance
+        types.FunctionDeclaration(
+            name="scan_qr",
+            description="Read a QR code held up to the robot's camera, e.g. the team's FRC Nexus code (sets our team and event).",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="frc_next_match",
+            description="Our next FRC robotics match at the current event: match name, queuing status, alliance color, partners, opponents and estimated times.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"team": types.Schema(type="STRING", description="Team number; empty for our team.")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="frc_event_status",
+            description="What match is queuing now at the FRC event, plus recent event announcements.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="frc_team_info",
+            description="Facts about an FRC team at this event: pit location, team name, ranking and win-loss record.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"team": types.Schema(type="STRING", description="Team number, e.g. 254; empty for our team.")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="frc_rankings",
+            description="Current qualification rankings at the FRC event (top teams and our rank).",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"top": types.Schema(type="INTEGER", description="How many top teams (default 5, max 10).")},
+            ),
+        ),
         # Google Workspace Tools
         types.FunctionDeclaration(
             name="calendar_events",
@@ -252,6 +287,14 @@ class GeminiSession:
                     pass
             q.put_nowait(pcm)
 
+    def say(self, text: str) -> None:
+        """Ask Gemini Live to announce something (e.g. an FRC queuing alert)."""
+        loop, sess = self._loop, getattr(self, "_session", None)
+        if not (loop and sess and self._connected):
+            return
+        content = types.Content(role="user", parts=[types.Part(text=f"Announce this to me out loud, word for word: {text}")])
+        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(sess.send_client_content(turns=content, turn_complete=True)))
+
     def init_client(self) -> bool:
         """Trigger reconnection or reset."""
         if not self.config.api_key:
@@ -347,6 +390,7 @@ class GeminiSession:
             self.state = "listening"
             self.last_error = ""
             self._connected = True
+            self._session = session
             self.on_event("gemini", f"Connected to {model}")
 
             # Flush stale mic buffer
@@ -472,6 +516,10 @@ class GeminiSession:
                 if self.motion:
                     return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
                 return {"error": "Robot motion not ready yet"}
+
+            elif name == "scan_qr" or name.startswith("frc_"):
+                frc = getattr(self, "frc", None)
+                return frc.handle(name, args) if frc else {"error": "FRC features are not ready yet"}
 
             # Google
             elif name == "calendar_events":

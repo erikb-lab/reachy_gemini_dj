@@ -146,3 +146,15 @@ def test_history_is_kept_between_turns():
     roles = [m["role"] for m in llm.calls[1]["msgs"]]
     assert roles == ["system", "user", "assistant", "user"]
     s.close()
+
+
+def test_robot_say_is_spoken_without_llm():
+    s, llm, sent, audio = make([])
+    s.on_say({"type": "say", "text": "Heads up! Qualification 12 is now queuing."})
+    for _ in range(200):
+        if any(m.get("type") == "turn_done" for m in sent):
+            break
+        time.sleep(0.01)
+    assert [m["text"] for m in sent if m.get("type") == "said"] == ["Heads up! Qualification 12 is now queuing."]
+    assert audio and llm.calls == []
+    s.close()

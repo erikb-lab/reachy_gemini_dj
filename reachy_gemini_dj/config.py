@@ -31,6 +31,13 @@ class Config:
     backend: str = "auto"
     brain_url: str = "ws://127.0.0.1:8765"
     allow_gemini_assist: bool = True
+    # FRC (FIRST Robotics): team/event can be filled by scanning a Nexus QR code
+    frc_team: str = ""
+    frc_event: str = ""
+    nexus_api_key: str = ""
+    tba_api_key: str = ""
+    nexus_link: str = ""          # private team link from the Nexus QR; never shown or sent anywhere
+    frc_alerts: bool = True
 
     @property
     def effective_model(self) -> str:

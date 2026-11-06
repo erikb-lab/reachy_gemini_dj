@@ -92,3 +92,20 @@ Reachy Mini (CM4)                               Brain computer (laptop / Mac min
 
 On a CPU-only laptop expect roughly 4-5 s to first spoken word for chat, about 13-15 s for music or weather,
 and about 25 s when a web search is needed.
+
+---
+
+## FRC robotics helper (Nexus + The Blue Alliance)
+
+For FIRST Robotics Competition events. No Google services are involved.
+
+1. In **Settings, FRC robotics** paste a free [FRC Nexus](https://frc.nexus/api) API key (live queuing) and/or a
+   [Blue Alliance](https://www.thebluealliance.com/account) read key (rankings and results).
+2. Press **Scan QR code** (or say "scan this QR code") and hold your team's Nexus code up to Reachy's camera.
+   The code is decoded on the robot; team and event are filled in. The private team link is stored only on the
+   robot and is never spoken, shown, or sent to any model.
+3. Ask: "When's our next match?", "What's queuing now?", "Where is team 254's pit?", "Show me the rankings."
+   With **Queuing alerts** on, Reachy says out loud when your match is queuing soon, now queuing or on deck
+   (it checks Nexus every 30 seconds).
+
+Match data from [FRC Nexus](https://frc.nexus) and [The Blue Alliance](https://www.thebluealliance.com).

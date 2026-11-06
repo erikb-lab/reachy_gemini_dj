@@ -79,6 +79,12 @@ class BrainSession:
     def on_frame(self, msg: dict) -> None:
         self.on_tool_result({"id": msg.get("id", ""), "result": msg.get("jpeg_b64", "")})
 
+    def on_say(self, msg: dict) -> None:
+        """Robot-initiated announcement (e.g. 'we are queuing'): spoken as-is, after any turn in progress."""
+        text = str(msg.get("text") or "").strip()[:400]
+        if text:
+            self._utts.put(("say", text))
+
     def barge_in(self) -> None:
         if self._busy:
             log.info("barge-in: cancelling the current turn")
@@ -169,15 +175,21 @@ class BrainSession:
                 self._warm()
                 continue
             # drop stale utterances if several queued up while busy: answer the newest only
-            while not self._utts.empty():
-                nxt = self._utts.get_nowait()
-                if nxt is None:
-                    return
-                audio = nxt
+            while isinstance(audio, np.ndarray) and not self._utts.empty():
+                nxt = self._utts.queue[0]
+                if not isinstance(nxt, np.ndarray):
+                    break
+                audio = self._utts.get_nowait()
             self._cancel.clear()
             self._busy = True
             try:
-                self._turn(audio)
+                if isinstance(audio, tuple):      # ("say", text)
+                    self._state("speaking")
+                    self._speak(audio[1])
+                    self.history += [{"role": "assistant", "content": audio[1]}]
+                    self.history = self.history[-2 * self.cfg.history_turns:]
+                else:
+                    self._turn(audio)
             except Cancelled:
                 log.info("turn cancelled")
             except Exception as e:

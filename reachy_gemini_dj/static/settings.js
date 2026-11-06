@@ -120,7 +120,7 @@
     c2.appendChild(rangeField('duck_level', 'Duck level', 'Music volume while someone is talking', 0, 1, 0.01, FMT.pct));
     c2.appendChild(rangeField('voice_gain', 'Voice loudness', 'Gain applied to Reachy’s voice', 0.2, 2.5, 0.05, FMT.x));
     c2.appendChild(rangeField('echo_guard', 'Echo guard', 'Raise if music interrupts Reachy; lower if it ignores you', 0.5, 5, 0.1, FMT.n1));
-    c2.appendChild(switchRow('web_search', 'Web search (Google grounding)', 'Lets Reachy look up live facts, news and weather.', true));
+    c2.appendChild(switchRow('web_search', 'Web search in Gemini mode', 'Lets Gemini look things up. The local brain always has free web search and weather.', true));
     root.appendChild(c2);
 
     // --- Backend ---
@@ -132,13 +132,62 @@
     be.addEventListener('change', function () { save('backend', function () { return be.value; }, 150, 'Backend'); });
     fields.backend = { el: be, set: function (v) { be.value = v || 'auto'; } };
     c3.appendChild(field('sp-backend', 'Backend', 'Which engine handles conversation', be));
-    c3.appendChild(textField('brain_url', 'Brain URL', 'Address of the local language model server', { type: 'url', placeholder: 'http://127.0.0.1:8080' }));
+    c3.appendChild(textField('brain_url', 'Brain URL', 'Address of the brain computer running reachy-brain', { type: 'url', placeholder: 'ws://192.168.1.50:8765' }));
     c3.appendChild(switchRow('allow_gemini_assist', 'Allow Gemini assist', 'Let the local backend ask Gemini for help with hard questions.', true));
     roBox.dl = h('dl', { class: 'sp-ro', 'aria-live': 'polite' });
     roBox.active = h('dd'); roBox.brain = h('dd');
     roBox.dl.append(h('dt', { text: 'Active backend' }), roBox.active, h('dt', { text: 'Brain status' }), roBox.brain);
     c3.appendChild(roBox.dl);
     root.appendChild(c3);
+
+    // --- FRC (FIRST Robotics): Nexus QR scan, queuing alerts, Blue Alliance ---
+    var c4 = h('div', { class: 'pn-card' }, [h('h2', { text: 'FRC robotics' })]);
+    var scanBtn = h('button', { type: 'button', class: 'pn-btn primary', text: 'Scan QR code' });
+    var scanMsg = h('span', { class: 'hint', 'aria-live': 'polite', text: 'Hold your team\u2019s Nexus code up to Reachy\u2019s camera.' });
+    scanBtn.addEventListener('click', function () {
+      scanBtn.disabled = true; scanMsg.textContent = 'Looking for a QR code\u2026';
+      post('/api/frc/scan', {}).then(function (r) {
+        if (r.ok) { scanMsg.textContent = r.result || ('Read: ' + (r.qr_text || '')); toast(r.result || 'QR code read'); }
+        else { scanMsg.textContent = r.error || 'No QR code found'; toast(r.error || 'No QR code found', true); }
+      }).catch(function (e) { scanMsg.textContent = 'Scan failed: ' + e.message; })
+        .then(function () { scanBtn.disabled = false; });
+    });
+    c4.appendChild(h('div', { class: 'sp-field' }, [h('div', { class: 'sp-row' }, [scanBtn]), scanMsg]));
+    c4.appendChild(textField('frc_team', 'Team number', 'Filled in by the Nexus QR code', { placeholder: 'e.g. 1234' }));
+    c4.appendChild(textField('frc_event', 'Event code', 'Blue Alliance / Nexus event key', { placeholder: 'e.g. 2026mokc' }));
+    c4.appendChild(secretField('nexus_api_key', 'nexus_key_set', 'Nexus API key', 'Live queuing. Get one at frc.nexus/api'));
+    c4.appendChild(secretField('tba_api_key', 'tba_key_set', 'The Blue Alliance key', 'Rankings and results. Get one at thebluealliance.com/account'));
+    c4.appendChild(switchRow('frc_alerts', 'Queuing alerts', 'Reachy says out loud when our match is queuing soon, now queuing or on deck.', true));
+    frcBox.dl = h('dl', { class: 'sp-ro', 'aria-live': 'polite' });
+    frcBox.q = h('dd'); frcBox.next = h('dd');
+    frcBox.dl.append(h('dt', { text: 'Now queuing' }), frcBox.q, h('dt', { text: 'Our next match' }), frcBox.next);
+    c4.appendChild(frcBox.dl);
+    var credit = h('p', { class: 'hint' }, ['Match data from ',
+      h('a', { href: 'https://frc.nexus', target: '_blank', rel: 'noopener', text: 'FRC Nexus' }), ' and ',
+      h('a', { href: 'https://www.thebluealliance.com', target: '_blank', rel: 'noopener', text: 'The Blue Alliance' }), '.']);
+    c4.appendChild(credit);
+    root.appendChild(c4);
+  }
+
+  var frcBox = {}, secretStates = {};
+  function secretField(key, setKey, label, hint) {
+    var inp = h('input', { class: 'sp-input', id: 'sp-' + key, type: 'password', autocomplete: 'new-password',
+      spellcheck: 'false', placeholder: 'Paste a key to replace the stored one' });
+    var btn = h('button', { type: 'button', class: 'pn-btn primary', text: 'Save' });
+    var st = h('span', { class: 'hint', text: '' });
+    secretStates[setKey] = st;
+    function go() {
+      var v = inp.value.trim();
+      if (!v) { toast('Paste a key first', true); return; }
+      var b = {}; b[key] = v; btn.disabled = true;
+      post('/api/config', b).then(function () { inp.value = ''; toast(label + ' saved'); })
+        .catch(function (e) { toast(label + ' not saved: ' + e.message, true); })
+        .then(function () { btn.disabled = false; });
+    }
+    btn.addEventListener('click', go);
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+    return h('div', { class: 'sp-field' }, [h('label', { for: 'sp-' + key }, [label + ' ', st]),
+      h('div', { class: 'sp-row' }, [inp, btn]), h('span', { class: 'hint', text: hint })]);
   }
 
   function brainText(b) {
@@ -148,6 +197,8 @@
     var st = b.status || b.state || (b.ok === true ? 'ok' : (b.ok === false ? 'unreachable' : ''));
     if (st) parts.push(String(st));
     if (b.model) parts.push(String(b.model));
+    if (b.connected !== undefined) parts.push(b.connected ? 'connected' : 'not connected');
+    if (b.reason) parts.push(String(b.reason));
     if (b.error) parts.push('error: ' + b.error);
     if (b.latency_ms != null) parts.push(Math.round(b.latency_ms) + ' ms');
     return parts.join(' · ') || JSON.stringify(b);
@@ -175,6 +226,16 @@
     keyState.style.color = c.api_key_set ? 'var(--p-ok)' : 'var(--p-bad)';
     roBox.active.textContent = s.active_backend ? String(s.active_backend) : 'not available yet';
     roBox.brain.textContent = brainText(s.brain);
+    Object.keys(secretStates).forEach(function (k) {
+      secretStates[k].textContent = c[k] ? '\u2713 set' : '\u2717 not set';
+      secretStates[k].style.color = c[k] ? 'var(--p-ok)' : 'var(--p-muted)';
+    });
+    var f = s.frc || {};
+    if (frcBox.q) {
+      var need = !c.frc_event ? 'scan your Nexus QR or set the event' : (!c.nexus_key_set ? 'add a Nexus API key for live queuing' : '');
+      frcBox.q.textContent = need || (f.error ? 'error: ' + f.error : (f.now_queuing || (f.updated ? 'nothing yet' : 'checking\u2026')));
+      frcBox.next.textContent = need ? '\u2014' : (f.next_match || (c.frc_team ? 'none scheduled' : 'set a team number'));
+    }
   }
 
   function init() {

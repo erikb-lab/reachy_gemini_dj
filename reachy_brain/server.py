@@ -76,6 +76,8 @@ class Brain:
                     sess.on_tool_result(m)
                 elif t == "frame":
                     sess.on_frame(m)
+                elif t == "say":
+                    sess.on_say(m)
                 elif t == "barge_in":
                     sess.barge_in()
                 elif t == "new_conversation":

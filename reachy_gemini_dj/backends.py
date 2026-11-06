@@ -77,6 +77,11 @@ class VoiceBackend:
         if a:
             a.push_mic(pcm)
 
+    def say(self, text: str) -> None:
+        a = self.active
+        if a and hasattr(a, "say"):
+            a.say(text)
+
     def execute_tool(self, name, args):
         return self.gemini.execute_tool(name, args)
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 # Tools whose result the model must read back to the user. Everything else is an action.
-INFO_TOOLS = {"calendar_events", "tasks_list", "gmail_check"}
+INFO_TOOLS = {"calendar_events", "tasks_list", "gmail_check", "scan_qr", "frc_next_match", "frc_event_status",
+              "frc_team_info", "frc_rankings"}
 
 
 def _json_schema(s: Any) -> dict:

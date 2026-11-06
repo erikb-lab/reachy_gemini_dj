@@ -86,6 +86,10 @@ class RemoteSession:
                 pcm_16k = bytes(len(pcm_16k))
         self._loop.call_soon_threadsafe(self._put, pcm_16k)
 
+    def say(self, text: str) -> None:
+        """Speak an announcement in the local voice (no LLM round)."""
+        self._send_json_threadsafe({"type": "say", "text": text})
+
     def new_conversation(self) -> None:
         self._send_json_threadsafe({"type": "new_conversation"})
 
