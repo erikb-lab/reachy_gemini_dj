@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import signal
 import threading
 
 import websockets
@@ -99,10 +100,20 @@ class Brain:
 def main(argv=None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     cfg = BrainConfig.from_args(argv)
+
+    def _on_term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _on_term)       # systemd/kill: shut down cleanly and stop llama-server
     brain = Brain(cfg)
-    brain.load()
+    try:
+        brain.load()
+    except BaseException:
+        brain.llm.stop()
+        raise
     try:
         asyncio.run(brain.serve())
+    except KeyboardInterrupt:
+        log.info("shutting down")
     finally:
         brain.llm.stop()
 

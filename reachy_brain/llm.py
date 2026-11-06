@@ -1,10 +1,12 @@
 """llama-server (OpenAI-compatible) lifecycle and streaming chat client with clause-level callbacks."""
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import re
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable
@@ -28,6 +30,16 @@ def split_ready(buf: str) -> tuple[str, str] | None:
     return None
 
 
+def _die_with_parent() -> None:
+    """Linux: have the kernel SIGTERM llama-server if the brain process dies, so it never lingers."""
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)   # PR_SET_PDEATHSIG
+    except Exception:
+        pass
+
+
 class Cancelled(Exception):
     pass
 
@@ -49,7 +61,9 @@ class LlamaServer:
             if c.mmproj_path:
                 cmd += ["--mmproj", c.mmproj_path]
             log.info("starting llama-server: %s", " ".join(cmd))
-            self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         preexec_fn=_die_with_parent if sys.platform.startswith("linux") else None)
+            atexit.register(self.stop)
         t0 = time.time()
         while time.time() - t0 < timeout_s:
             if self.proc and self.proc.poll() is not None:
@@ -78,11 +92,12 @@ class LlamaServer:
                 self.proc.kill()
 
     def chat_stream(self, messages: list[dict], tools: list[dict], on_clause: Callable[[str], None],
-                    cancel: threading.Event, tool_choice: str = "auto") -> tuple[str, list[dict]]:
+                    cancel: threading.Event, tool_choice: str = "auto",
+                    max_tokens: int | None = None) -> tuple[str, list[dict]]:
         """Stream one completion. Returns (spoken_text, tool_calls). on_clause gets each speakable clause."""
         c = self.cfg
         body: dict[str, Any] = {"messages": messages, "temperature": c.temperature, "top_p": c.top_p,
-                                "max_tokens": c.max_tokens, "stream": True}
+                                "max_tokens": max_tokens or c.max_tokens, "stream": True}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice

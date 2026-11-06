@@ -51,7 +51,10 @@ class FakeLLM:
         self.rounds = list(rounds)
         self.calls = []
 
-    def chat_stream(self, msgs, tools, on_clause, cancel, tool_choice="auto"):
+    def chat_stream(self, msgs, tools, on_clause, cancel, tool_choice="auto", max_tokens=None):
+        if max_tokens == 1:          # warm-up call
+            self.warmups = getattr(self, "warmups", 0) + 1
+            return "", []
         self.calls.append({"msgs": list(msgs), "tools": [t["function"]["name"] for t in tools], "choice": tool_choice})
         clauses, calls = self.rounds.pop(0)
         for c in clauses:
@@ -125,6 +128,8 @@ def test_info_tool_forces_answer_without_second_lookup():
 def test_server_tools_listed_and_gemini_only_with_key():
     s, llm, sent, _ = make([(["Hi."], [])])
     ready = next(m for m in sent if m.get("type") == "ready")
+    time.sleep(0.1)
+    assert getattr(llm, "warmups", 0) >= 1
     assert "web_search" in ready["tools"] and "get_weather" in ready["tools"]
     assert "ask_gemini" not in ready["tools"] and "look" not in ready["tools"]
     s.on_hello({"tools": [], "gemini_key": "k"})

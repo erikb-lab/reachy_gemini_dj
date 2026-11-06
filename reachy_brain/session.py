@@ -59,7 +59,7 @@ class BrainSession:
             self.gemini_key = msg["gemini_key"]
         self.send_json({"type": "ready", "vision": self.vision, "assist": self._assist_on(),
                         "tools": [t["function"]["name"] for t in self._tools()]})
-        self._state("listening")
+        self._utts.put("warm")   # fill the LLM prompt cache with this system prompt + tool list
 
     def on_audio(self, pcm: bytes) -> None:
         for kind, payload in self.seg.feed(pcm):
@@ -165,6 +165,9 @@ class BrainSession:
             audio = self._utts.get()
             if audio is None:
                 return
+            if isinstance(audio, str):          # "warm"
+                self._warm()
+                continue
             # drop stale utterances if several queued up while busy: answer the newest only
             while not self._utts.empty():
                 nxt = self._utts.get_nowait()
@@ -185,6 +188,19 @@ class BrainSession:
                 if not self._closed.is_set():
                     self.send_json({"type": "turn_done"})
                     self._state("listening")
+
+    def _warm(self) -> None:
+        """Process the system prompt and tool schemas once so the first real question is fast (otherwise the
+        first turn re-reads ~2k prompt tokens on a CPU, which took ~170 s in testing)."""
+        self._state("loading", "warming up the language model")
+        t0 = time.time()
+        try:
+            msgs = [{"role": "system", "content": self._system()}, {"role": "user", "content": "hi"}]
+            self.llm.chat_stream(msgs, self._tools(), lambda c: None, threading.Event(), max_tokens=1)
+            log.info("LLM warm-up took %.1fs", time.time() - t0)
+        except Exception as e:
+            log.warning("LLM warm-up failed: %s", e)
+        self._state("listening")
 
     def _turn(self, audio: np.ndarray) -> None:
         t0 = time.time()
