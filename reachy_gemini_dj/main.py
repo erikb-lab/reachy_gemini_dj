@@ -24,6 +24,7 @@ from .config import Config
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
+from .gain import clamp_duck, clamp_volume
 from .music import MusicPlayer
 
 log = logging.getLogger("reachy_gemini_dj")
@@ -175,6 +176,10 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.post("/api/config")
         def update_config(data: ConfigUpdate):
             d = data.model_dump(exclude_unset=True)
+            if d.get("music_volume") is not None:
+                d["music_volume"] = clamp_volume(d["music_volume"])
+            if d.get("duck_level") is not None:
+                d["duck_level"] = clamp_duck(d["duck_level"])
             for k, v in d.items():
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
