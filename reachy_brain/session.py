@@ -22,6 +22,7 @@ import numpy as np
 from .assist import SERVER_TOOLS, run_server_tool
 from .llm import Cancelled
 from .segmenter import Segmenter
+from .speakable import speakable
 
 log = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ class BrainSession:
             return
         self.send_json({"type": "said", "text": text})
         self._speaking = True
-        for chunk in self.tts.stream(text):
+        for chunk in self.tts.stream(speakable(text)):
             if self._cancel.is_set():
                 return
             pcm = (np.clip(chunk, -1.0, 1.0) * 32767).astype("<i2").tobytes()
