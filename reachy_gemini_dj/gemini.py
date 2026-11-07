@@ -290,6 +290,14 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
             description="Silence a timer or alarm that is ringing.",
             parameters=types.Schema(type="OBJECT", properties={}),
         ),
+        types.FunctionDeclaration(
+            name="quiet_mode",
+            description="Go quiet: stop listening and rest for a while (default 30 minutes), then wake up on your own.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"minutes": types.Schema(type="INTEGER", description="How long to stay quiet, 1 to 480 (default 30).")},
+            ),
+        ),
     ]
 
     tools = [types.Tool(function_declarations=declarations)]
@@ -302,6 +310,9 @@ class GeminiSession:
     """Manages the connection, audio streams, and tool execution with Gemini Live."""
 
     memory = None                 # memory.Memory, set by main.py (long-term facts; see memory.py)
+    quiet = None                  # qol.QuietMode, set by main.py
+    on_turn_done = None           # called (no args) when Gemini finishes a turn; set by main.py
+    on_connected = None           # called (no args) each time the Live session connects; set by main.py
 
     def __init__(
         self,
@@ -461,6 +472,11 @@ class GeminiSession:
             self._connected = True
             self._session = session
             self.on_event("gemini", f"Connected to {model}")
+            if self.on_connected:
+                try:
+                    self.on_connected()
+                except Exception:
+                    log.exception("on_connected hook failed")
 
             # Flush stale mic buffer
             while not self._mic_queue.empty():
@@ -515,6 +531,12 @@ class GeminiSession:
 
                     if sc.output_transcription and sc.output_transcription.text:
                         self.on_said(sc.output_transcription.text)
+
+                    if getattr(sc, "turn_complete", False) and self.on_turn_done:
+                        try:
+                            self.on_turn_done()
+                        except Exception:
+                            log.exception("on_turn_done hook failed")
 
                 upd = getattr(msg, "session_resumption_update", None)
                 if upd and upd.resumable and upd.new_handle:
@@ -598,6 +620,10 @@ class GeminiSession:
             elif name in ("set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm"):
                 timers = getattr(self, "timers", None)
                 return timers.handle(name, args) if timers else {"error": "Timers are not ready yet"}
+
+            elif name == "quiet_mode":
+                quiet = getattr(self, "quiet", None)
+                return quiet.enter(args.get("minutes", 30)) if quiet else {"error": "Quiet mode is not ready yet"}
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)

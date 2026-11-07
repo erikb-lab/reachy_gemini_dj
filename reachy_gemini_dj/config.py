@@ -41,6 +41,7 @@ class Config:
     frc_alerts: bool = True
     # How the mic is used: "always" = always listening; "push_to_talk" = only while talk is held (loud events)
     listen_mode: str = "always"
+    greet_on_start: bool = True   # say "I'm ready." once when the voice backend first becomes ready after app start
     timezone: str = ""            # IANA zone for alarms, e.g. "America/Chicago"; filled from the controller page
 
     @property

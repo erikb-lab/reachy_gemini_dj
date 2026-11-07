@@ -32,6 +32,7 @@ from .gain import clamp_duck, clamp_volume
 from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
 from .remote_session import RemoteSession
+from .qol import ConversationLog, Greeter, QuietMode, brain_status
 
 log = logging.getLogger("reachy_gemini_dj")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -63,6 +64,7 @@ class ConfigUpdate(BaseModel):
     frc_alerts: bool | None = None
     listen_mode: str | None = None          # "always" | "push_to_talk"
     timezone: str | None = None             # IANA name, sent by the controller page
+    greet_on_start: bool | None = None
 
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
@@ -83,6 +85,10 @@ class PttRequest(BaseModel):
 
 class MuteUpdate(BaseModel):
     muted: bool
+
+
+class QuietRequest(BaseModel):
+    minutes: int = 30
 
 
 class TimerCancel(BaseModel):
@@ -189,6 +195,17 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.talk_pressed_hooks.append(self.timers.dismiss)
         set_timezone(self.config.timezone)
 
+        # Quality of life (qol.py): conversation log, quiet mode, "I'm ready" greeting
+        self.convo = ConversationLog(backend=lambda: self.voice.active_name)
+        self.quiet = QuietMode(set_muted=self._set_muted, say=self.voice.say, on_event=self.record_event)
+        self.gemini_session.quiet = self.quiet
+        self.talk_pressed_hooks.append(self.quiet.on_talk)
+        self.greeter = Greeter(say=self.voice.say, enabled=lambda: self.config.greet_on_start, is_quiet=lambda: self.quiet.active)
+        self.local_session.on_ready = lambda: self.greeter.ready("local")
+        self.gemini_session.on_connected = lambda: self.greeter.ready("gemini")
+        self.local_session.on_turn_done = self.convo.turn_done
+        self.gemini_session.on_turn_done = self.convo.turn_done
+
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
 
@@ -212,15 +229,23 @@ class ReachyGeminiDJ(ReachyMiniApp):
         fn = getattr(media, "get_frame", None)
         return fn() if callable(fn) else None
 
+    def _set_muted(self, muted: bool) -> None:
+        self.muted = bool(muted)
+        if self.audio_pipe:
+            self.audio_pipe.set_mute(self.muted)
+
     def _set_heard(self, text: str) -> None:
+        self.convo.heard_fragment(text)
         self.heard_text = (self.heard_text + " " + text).strip()[-300:]
 
     def _set_heard_turn(self, text: str) -> None:
         """Local brain: 'heard' is one complete utterance and starts a new turn (Gemini streams fragments instead)."""
+        self.convo.heard_utterance(text)
         self.heard_text = text.strip()[-300:]
         self.said_text = ""
 
     def _set_said(self, text: str) -> None:
+        self.convo.said(text)
         self.said_text = (self.said_text + " " + text).strip()[-300:]
 
     def record_event(self, kind: str, text: str) -> None:
@@ -271,7 +296,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 "ffmpeg": bool(shutil.which("ffmpeg")),
                 "voices": VOICES,
                 "active_backend": self.voice.active_name,
-                "brain": self.voice.status(),
+                "brain": brain_status(self.voice.status(), self.local_session.state, self.convo.last_latency("local")),
+                "conversation": self.convo.listing(),
+                "quiet": self.quiet.status(),
                 "config": {
                     "api_key_set": bool(self.config.api_key),
                     "model": self.config.model,
@@ -286,6 +313,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "expressive": self.config.expressive,
                     "dance_enabled": self.config.dance_enabled,
                     "timezone": self.config.timezone,
+                    "greet_on_start": self.config.greet_on_start,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
@@ -331,10 +359,21 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         @app.post("/api/mute")
         def set_mute(data: MuteUpdate):
-            self.muted = data.muted
-            if self.audio_pipe:
-                self.audio_pipe.set_mute(self.muted)
+            self._set_muted(data.muted)
+            if not data.muted:
+                self.quiet.wake(say=False, reason="unmuted")
             return {"ok": True, "muted": self.muted}
+
+        # Quiet mode: POST /api/quiet {"minutes": 30} (1-480) mutes the mic and rests the head until the time is up;
+        # POST /api/quiet/wake ends it early. Also the voice tool quiet_mode and pressing talk. See GET /api/state "quiet".
+        @app.post("/api/quiet")
+        def quiet_start(req: QuietRequest):
+            return {"ok": True, **self.quiet.enter(req.minutes), "quiet": self.quiet.status()}
+
+        @app.post("/api/quiet/wake")
+        def quiet_wake():
+            woke = self.quiet.wake(reason="page")
+            return {"ok": True, "woke": woke, "quiet": self.quiet.status()}
 
         # Push-to-talk. This is the whole API a physical button needs (ESP32 over Wi-Fi/BLE bridge, USB foot pedal or
         # presenter clicker via a tiny script, ...); no auth, so it is only as private as the robot's network:
@@ -596,10 +635,12 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.frc.start()
         self.timers.motion = self.motion
         self.timers.start()
+        self.quiet.motion = self.motion
+        self.quiet.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
-            if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing:
+            if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing and not self.quiet.active:
                 time.sleep(12.0)
                 if not self.motion.busy and not stop_event.is_set():
                     try:
@@ -617,6 +658,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 pass
         self.frc.stop()
         self.timers.stop()
+        self.quiet.stop()
         self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()
