@@ -19,14 +19,26 @@ class Config:
     model: str = "gemini-2.5-flash-native-audio-latest"
     voice: str = "Puck"
     extra_instructions: str = ""
-    music_volume: float = 2.00
-    duck_level: float = 0.20
+    music_volume: float = 2.00  # linear gain 0.0-2.5 (1.0 = unity, 2.0 = 200%); see gain.py
+    duck_level: float = 0.20  # fraction 0.0-1.0 of music_volume while someone talks
     voice_gain: float = 1.50
+    hw_speaker_percent: int = 100   # speaker chip's own level, set at start (the robot ships at 72% = -17 dB); 0 = leave alone
     echo_guard: float = 1.50
     web_search: bool = False
     motion_enabled: bool = True
     expressive: bool = True
     dance_enabled: bool = False
+    # Voice backend: "auto" = local brain first, Gemini Live if it fails; "local"; "gemini"
+    backend: str = "auto"
+    brain_url: str = "ws://127.0.0.1:8765"
+    allow_gemini_assist: bool = True
+    # FRC (FIRST Robotics): team/event can be filled by scanning a Nexus QR code
+    frc_team: str = ""
+    frc_event: str = ""
+    nexus_api_key: str = ""
+    tba_api_key: str = ""
+    nexus_link: str = ""          # private team link from the Nexus QR; never shown or sent anywhere
+    frc_alerts: bool = True
 
     @property
     def effective_model(self) -> str:
@@ -52,6 +64,8 @@ class Config:
         env_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if env_key:
             cfg.api_key = env_key.strip()
+        if os.environ.get("BRAIN_URL"):
+            cfg.brain_url = os.environ["BRAIN_URL"].strip()
 
         if CONFIG_FILE.exists():
             try:

@@ -76,6 +76,9 @@ class Motion:
         self.last = ""
         self.error = ""
         self.recent: collections.deque = collections.deque(maxlen=5)
+        self.learning = False
+        from .poses import PoseStore
+        self.poses = PoseStore()
         threading.Thread(target=self._worker, daemon=True, name="motion").start()
         threading.Thread(target=self._prefetch, daemon=True, name="motion-prefetch").start()
 
@@ -121,6 +124,8 @@ class Motion:
             "emotions_ready": EMOTIONS_REPO in self._libs,
             "dances_ready": DANCES_REPO in self._libs,
             "error": self.error or "; ".join(v for k, v in self._lib_err.items() if not k.endswith("_t")),
+            "learning": self.learning,
+            "poses": self.poses.names(),
         }
 
     # ------------------------------------------------------------------ worker ---
@@ -141,10 +146,16 @@ class Motion:
                 self.busy = False
 
     def _submit(self, label: str, fn) -> None:
+        if self.learning:
+            log.info("Learn mode is on (motors relaxed); ignoring move: %s", label)
+            return
         if not self._enabled():
             log.debug("Movement is turned off in the settings; ignoring move: %s", label)
             return
-        item = (label, fn)
+        def powered(fn=fn):
+            self._ensure_motors()
+            fn()
+        item = (label, powered)
         try:
             self._q.put_nowait(item)
         except queue.Full:
@@ -153,6 +164,13 @@ class Motion:
             except queue.Empty:
                 pass
             self._q.put_nowait(item)
+
+    def _ensure_motors(self) -> None:
+        """The robot daemon can start (or be left) with motors off; a move would then silently do nothing."""
+        try:
+            self.mini.enable_motors()
+        except Exception as e:
+            log.warning("could not enable motors: %s", e)
 
     # ------------------------------------------------------------------- actions ---
     def move_head(self, direction: str) -> str:
@@ -217,3 +235,76 @@ class Motion:
 
         self._submit(f"dance {name}", run)
         return name
+
+    # ------------------------------------------------------------- learn poses ---
+    def learn_start(self) -> str:
+        """Turn the motors off so the robot can be posed freely by hand (the head will not hold itself up)."""
+        if self.learning:
+            return "already in learn mode"
+        while self.busy:                       # let a running move finish before going limp
+            time.sleep(0.05)
+        self.mini.disable_motors()
+        self.learning = True
+        self.last = "learn mode (motors off)"
+        return "motors off: pose me by hand, then lock"
+
+    def learn_stop(self) -> str:
+        """Turn the motors back on and lock the robot where it was left (no snap back to the old target)."""
+        if not self.learning:
+            return "learn mode is off"
+        head = antennas = body_yaw = None
+        try:
+            head = self.mini.get_current_head_pose()
+            head_joints, antennas = self.mini.get_current_joint_positions()
+            body_yaw = float(head_joints[0]) if head_joints else None
+        except Exception as e:
+            log.warning("could not read the pose before locking: %s", e)
+        if head is not None:                   # aim the controller at the current position first...
+            try:
+                self.mini.set_target(head=head, antennas=antennas, body_yaw=body_yaw)
+            except Exception as e:
+                log.debug("pre-lock target: %s", e)
+        self.mini.enable_motors()              # ...then power the motors so they hold it
+        if head is not None:
+            try:
+                self.mini.set_target(head=head, antennas=antennas, body_yaw=body_yaw)
+            except Exception as e:
+                log.debug("lock target: %s", e)
+        self.learning = False
+        self.last = "pose locked"
+        return "motors on: pose locked"
+
+    def capture(self) -> dict:
+        head = self.mini.get_current_head_pose()
+        head_joints, antennas = self.mini.get_current_joint_positions()
+        return {"head": [[float(x) for x in row] for row in head],
+                "antennas": [float(a) for a in antennas],
+                "head_joints": [float(j) for j in head_joints]}
+
+    def save_pose(self, name: str) -> str:
+        """Lock the pose if the motors are off, then read it and write it to poses.json immediately."""
+        from .poses import clean_name
+        clean_name(name)                       # reject an empty name before touching the motors
+        if self.learning:
+            self.learn_stop()
+            time.sleep(0.3)                    # let the motors settle on the locked pose
+        return self.poses.save(name, self.capture())
+
+    def goto_pose(self, name: str, duration: float = 1.2) -> str:
+        found = self.poses.find(name)
+        if not found:
+            names = self.poses.names()
+            raise ValueError(f"No saved pose called '{name}'." + (f" Saved poses: {', '.join(names)}." if names else
+                                                                    " No poses saved yet."))
+        real, p = found
+        if self.learning:
+            self.learn_stop()
+
+        def run():
+            import numpy as np
+            joints = p.get("head_joints") or []
+            self.mini.goto_target(head=np.array(p["head"], dtype=float), antennas=p.get("antennas"),
+                                  duration=duration, body_yaw=float(joints[0]) if joints else 0.0)
+
+        self._submit(f"pose {real}", run)
+        return real

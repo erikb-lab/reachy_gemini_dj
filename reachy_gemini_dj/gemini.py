@@ -15,6 +15,8 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
+from .gain import percent_to_volume, volume_to_percent
+
 log = logging.getLogger(__name__)
 
 VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
@@ -69,10 +71,10 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         ),
         types.FunctionDeclaration(
             name="set_volume",
-            description="Set music volume (0-100 percent).",
+            description="Set music volume in percent: 100 is normal level, 0 is silent, up to 250 is a boost.",
             parameters=types.Schema(
                 type="OBJECT",
-                properties={"volume": types.Schema(type="INTEGER", description="Volume level from 0 to 100.")},
+                properties={"volume": types.Schema(type="INTEGER", description="Volume percent from 0 to 250 (100 = normal).")},
                 required=["volume"],
             ),
         ),
@@ -101,6 +103,61 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 type="OBJECT",
                 properties={"direction": types.Schema(type="STRING", description="Direction: left, right, up, down, front.")},
                 required=["direction"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="robot_pose",
+            description="Move into a pose the user taught you by hand, by its saved name (e.g. 'wave', 'bow').",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"name": types.Schema(type="STRING", description="Name of the saved pose.")},
+                required=["name"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="save_pose",
+            description="Remember the robot's current position as a named pose, when the user asks you to save or remember this pose.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"name": types.Schema(type="STRING", description="Name to save the pose under.")},
+                required=["name"],
+            ),
+        ),
+        # FRC (FIRST Robotics Competition) tools: QR scan, FRC Nexus queuing, The Blue Alliance
+        types.FunctionDeclaration(
+            name="scan_qr",
+            description="Read a QR code held up to the robot's camera, e.g. the team's FRC Nexus code (sets our team and event).",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="frc_next_match",
+            description="Our next FRC robotics match at the current event: match name, queuing status, alliance color, partners, opponents and estimated times.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"team": types.Schema(type="STRING", description="Team number; empty for our team.")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="frc_event_status",
+            description="What match is queuing now at the FRC event, plus recent event announcements.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="frc_team_info",
+            description="Look up any FRC team (no event needed): name, hometown, rookie year, recent competitions "
+                        "and results, and awards. If an event is set, also its pit location and rank there.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"team": types.Schema(type="STRING", description="Team number, e.g. 254; empty for our team."),
+                            "year": types.Schema(type="INTEGER", description="Season for detailed results (default: current).")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="frc_rankings",
+            description="Current qualification rankings at the FRC event (top teams and our rank).",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"top": types.Schema(type="INTEGER", description="How many top teams (default 5, max 10).")},
             ),
         ),
         # Google Workspace Tools
@@ -232,6 +289,14 @@ class GeminiSession:
                     pass
             q.put_nowait(pcm)
 
+    def say(self, text: str) -> None:
+        """Ask Gemini Live to announce something (e.g. an FRC queuing alert)."""
+        loop, sess = self._loop, getattr(self, "_session", None)
+        if not (loop and sess and self._connected):
+            return
+        content = types.Content(role="user", parts=[types.Part(text=f"Announce this to me out loud, word for word: {text}")])
+        loop.call_soon_threadsafe(lambda: asyncio.ensure_future(sess.send_client_content(turns=content, turn_complete=True)))
+
     def init_client(self) -> bool:
         """Trigger reconnection or reset."""
         if not self.config.api_key:
@@ -327,6 +392,7 @@ class GeminiSession:
             self.state = "listening"
             self.last_error = ""
             self._connected = True
+            self._session = session
             self.on_event("gemini", f"Connected to {model}")
 
             # Flush stale mic buffer
@@ -421,10 +487,11 @@ class GeminiSession:
             elif name == "stop_music":
                 return self.music.stop()
             elif name == "set_volume":
-                vol = max(0, min(100, int(args.get("volume", 70)))) / 100.0
+                # Tool takes percent (100 = unity, up to 250 = boost); see gain.py.
+                vol = percent_to_volume(args.get("volume", 70))
                 self.config.music_volume = vol
                 self.music.set_volume(vol)
-                return {"result": f"Volume set to {int(vol * 100)}%"}
+                return {"result": f"Volume set to {volume_to_percent(vol)}%"}
 
             # Motion
             elif name == "robot_emotion":
@@ -442,6 +509,19 @@ class GeminiSession:
                     res = self.motion.move_head(args.get("direction", "front"))
                     return {"result": res}
                 return {"error": "Robot motion not ready yet"}
+
+            elif name == "robot_pose":
+                if self.motion:
+                    return {"result": f"Moving to pose {self.motion.goto_pose(args.get('name', ''))}"}
+                return {"error": "Robot motion not ready yet"}
+            elif name == "save_pose":
+                if self.motion:
+                    return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
+                return {"error": "Robot motion not ready yet"}
+
+            elif name == "scan_qr" or name.startswith("frc_"):
+                frc = getattr(self, "frc", None)
+                return frc.handle(name, args) if frc else {"error": "FRC features are not ready yet"}
 
             # Google
             elif name == "calendar_events":

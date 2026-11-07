@@ -4,7 +4,9 @@ from __future__ import annotations
 import collections
 import logging
 import math
+import shutil
 import struct
+import subprocess
 import threading
 import time
 from typing import Callable
@@ -52,6 +54,30 @@ def resample(x: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
         np.arange(len(x)),
         x,
     ).astype(np.float32)
+
+
+def set_hw_speaker_level(percent: int) -> str:
+    """Set the Reachy Mini speaker's ALSA 'PCM' playback level (stereo front control). Returns a status string.
+    The robot ships at 72% (-17 dB), which makes music quiet no matter what the app's gain says."""
+    if not percent:
+        return "left alone"
+    amixer = shutil.which("amixer")
+    if not amixer:
+        return "amixer not found"
+    card = "0"
+    try:
+        for line in open("/proc/asound/cards"):
+            if "Reachy Mini Audio" in line:
+                card = line.split()[0]
+                break
+    except OSError:
+        pass
+    pct = max(0, min(100, int(percent)))
+    try:
+        r = subprocess.run([amixer, "-c", card, "sset", "PCM,0", f"{pct}%"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"amixer failed: {e}"
+    return f"speaker level {pct}%" if r.returncode == 0 else f"amixer error: {r.stderr.strip()[:80]}"
 
 
 class AudioPipeline:
@@ -134,6 +160,7 @@ class AudioPipeline:
             self.music.reset_duck()
 
     def start(self) -> None:
+        log.info("Hardware speaker: %s", set_hw_speaker_level(getattr(self.config, "hw_speaker_percent", 100)))
         # Start hardware streams via media helper
         try:
             if hasattr(self.media, "start_recording"):
@@ -206,10 +233,15 @@ class AudioPipeline:
                 base_speech_thr = max(0.015, self.noise_floor * 2.2 * echo_factor)
 
                 # If robot speaker is playing, raise threshold to suppress echo
+                # Music from the robot's speaker leaks into the mic just like its voice does: without this the
+                # music itself counts as "speech" (music stays ducked, lyrics get transcribed, barge-ins fire).
+                music_on = self._music_audible()
                 if self._is_robot_speaking:
                     threshold = max(base_speech_thr, 0.06 * echo_factor)
                 else:
                     threshold = base_speech_thr
+                if music_on:
+                    threshold = max(threshold, 0.06 * echo_factor * max(0.5, float(self.music._volume)))
 
                 is_speech = rms > threshold
 
@@ -226,7 +258,7 @@ class AudioPipeline:
                 if self.on_pcm_chunk:
                     # Echo suppression: if robot is speaking and user is NOT clearly interrupting,
                     # attenuate mic input so Gemini doesn't hear its own echo
-                    if self._is_robot_speaking and not (rms > 0.12 * echo_factor):
+                    if (self._is_robot_speaking or music_on) and not (rms > 0.12 * echo_factor):
                         out_pcm = (np.clip(x16 * 0.05, -1.0, 1.0) * 32767).astype("<i2").tobytes()
                     else:
                         out_pcm = (np.clip(x16, -1.0, 1.0) * 32767).astype("<i2").tobytes()
@@ -236,6 +268,12 @@ class AudioPipeline:
             except Exception as e:
                 log.debug("Audio capture loop iteration note: %s", e)
                 time.sleep(0.02)
+
+    def _music_audible(self) -> bool:
+        try:
+            return bool(self.music.is_playing)
+        except Exception:
+            return False
 
     def _playback_loop(self) -> None:
         chunk_size = int(self.out_sr * FRAME_S)
