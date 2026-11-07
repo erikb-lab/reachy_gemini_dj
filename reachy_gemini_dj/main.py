@@ -70,8 +70,15 @@ class ConfigUpdate(BaseModel):
     timezone: str | None = None             # IANA name, sent by the controller page
     greet_on_start: bool | None = None
     imu_reactions: bool | None = None
+    music_eq_bass: float | None = None
+    music_eq_mid: float | None = None
+    music_eq_treble: float | None = None
+    gamepad_enabled: bool | None = None
+    gamepad_speed: float | None = None
 
 
+EQ_KEYS = ("music_eq_bass", "music_eq_mid", "music_eq_treble")
+EQ_RANGE_DB = 12.0
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
 VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
 
@@ -178,6 +185,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         # Subsystems initialized at startup
         self.music = MusicPlayer(volume=self.config.music_volume, autoplay=self.config.music_autoplay)
+        self.music.set_eq(self.config.music_eq_bass, self.config.music_eq_mid, self.config.music_eq_treble)
         self.motion: Motion | None = None
         self.audio_pipe: AudioPipeline | None = None
         self.gemini_session = GeminiSession(
@@ -381,6 +389,11 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "timezone": self.config.timezone,
                     "greet_on_start": self.config.greet_on_start,
                     "imu_reactions": self.config.imu_reactions,
+                    "music_eq_bass": self.config.music_eq_bass,
+                    "music_eq_mid": self.config.music_eq_mid,
+                    "music_eq_treble": self.config.music_eq_treble,
+                    "gamepad_enabled": self.config.gamepad_enabled,
+                    "gamepad_speed": self.config.gamepad_speed,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
@@ -422,12 +435,21 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:
                 d["duck_level"] = clamp_duck(d["duck_level"])
+            for k in EQ_KEYS:
+                if d.get(k) is not None:
+                    d[k] = round(max(-EQ_RANGE_DB, min(EQ_RANGE_DB, float(d[k]))), 1)
+            if d.get("gamepad_speed") is not None:
+                d["gamepad_speed"] = round(max(0.25, min(2.0, float(d["gamepad_speed"]))), 2)
             for k, v in d.items():
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
             self.music.autoplay = bool(self.config.music_autoplay)
+            if any(k in d for k in EQ_KEYS):
+                self.music.set_eq(self.config.music_eq_bass, self.config.music_eq_mid, self.config.music_eq_treble)
+            if d.get("gamepad_enabled") is False and self.motion and self.motion.manual:
+                self.motion.drive_stop()
             if d.get("hw_speaker_percent") is not None:
                 set_hw_speaker_level(self.config.hw_speaker_percent)
             if (VOICE_KEYS | FRC_KEYS) & d.keys():
@@ -593,6 +615,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
         def drive_toggle(req: DriveToggle):
             if not self.motion:
                 return {"ok": False, "error": "Robot motion subsystem not ready"}
+            if req.on and not self.config.gamepad_enabled:
+                return {"ok": False, "error": "Gamepad mode is off: turn it on in Settings > Experimental."}
             if req.on and not self.config.motion_enabled:
                 return {"ok": False, "error": "Robot movement is turned off in Settings."}
             try:

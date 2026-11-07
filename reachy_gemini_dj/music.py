@@ -119,6 +119,11 @@ class MusicPlayer:
         with self._lock:
             self._volume = _gain.clamp_volume(volume)
 
+    def set_eq(self, bass_db: float, mid_db: float, treble_db: float) -> None:
+        """Music EQ in dB per band (-12..+12). STUB: stored only; the EQ agent implements the filter + live apply."""
+        with self._lock:
+            self._eq = (float(bass_db), float(mid_db), float(treble_db))
+
     def set_duck(self, duck_level: float) -> None:
         """Duck music to this fraction (0.0-1.0) of volume; fades in over ~80 ms."""
         with self._lock:
