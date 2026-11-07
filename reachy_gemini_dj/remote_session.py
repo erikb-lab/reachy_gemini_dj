@@ -33,6 +33,8 @@ RECENT_SPEECH_S = 120.0
 class RemoteSession:
     name = "local"
     get_memory: Callable[[], list[str]] | None = None      # set by main.py: the owner's remembered facts (memory.py)
+    on_ready: Callable[[], None] | None = None             # set by main.py: the brain says it is warmed up and ready
+    on_turn_done: Callable[[], None] | None = None         # set by main.py: the brain finished a turn
 
     def __init__(self, config, execute_tool: Callable[[str, dict], dict], on_event: Callable[[str, str], None],
                  on_voice_chunk: Callable[[bytes], None] | None = None, on_barge_in: Callable[[], None] | None = None,
@@ -120,6 +122,14 @@ class RemoteSession:
             self.on_state(state, detail)
         except Exception:
             log.debug("on_state callback failed", exc_info=True)
+
+    @staticmethod
+    def _call_hook(fn) -> None:
+        if fn:
+            try:
+                fn()
+            except Exception:
+                log.debug("hook failed", exc_info=True)
 
     def _put(self, item) -> None:
         q = self._out
@@ -265,6 +275,7 @@ class RemoteSession:
             elif t == "ready":
                 self.info = m
                 self.on_event("brain", "Brain ready: " + ", ".join(m.get("tools", [])))
+                self._call_hook(self.on_ready)
             elif t == "error":
                 self.consecutive_failures += 1
                 self.last_error = m.get("text", "brain error")
@@ -274,6 +285,7 @@ class RemoteSession:
                     self.consecutive_failures = 0
                 self._turn_started = None
                 self.last_error = ""
+                self._call_hook(self.on_turn_done)
 
     async def _run_tool(self, ws, m: dict) -> None:
         try:

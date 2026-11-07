@@ -101,6 +101,14 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
    - `--gemini-key` for Gemini help
 4. Keep the brain computer from going to sleep.
 
+### Run the brain as a service
+On a Linux laptop with systemd you can let the brain start by itself and restart if it crashes. Run
+`tools/install_brain_service.sh` with the paths to the python venv, `llama-server`, the model and the mmproj
+(`--python`, `--llama-server`, `--model`, `--mmproj`). It writes a user service called `reachy-brain` and starts it.
+Add `--at-boot` to start it at boot instead of at login. Logs go to the journal:
+`journalctl --user -u reachy-brain -f`. The first start takes a couple of minutes while the models load.
+The undo steps are at the bottom of the script.
+
 ### Voice backend (Settings)
 - **Auto** (default) uses the local brain first. If the brain can't be reached at start, or fails 3 times in a
   row, the app switches to Gemini Live, which needs an API key. It switches back when the brain is reachable and

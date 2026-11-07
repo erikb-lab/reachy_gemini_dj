@@ -1,0 +1,23 @@
+# systemd USER unit template for the Reachy brain (STT + LLM + TTS server on the laptop).
+# tools/install_brain_service.sh fills in the @...@ placeholders and writes it to
+# ~/.config/systemd/user/reachy-brain.service. Logs go to the journal:  journalctl --user -u reachy-brain -f
+[Unit]
+Description=Reachy brain (local voice server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+@HF_HOME_LINE@
+ExecStart=@PYTHON@ -s -m reachy_brain.server --llama-server-bin @LLAMA_SERVER@ --model @MODEL@ --mmproj @MMPROJ@ --port @PORT@
+# Stop the whole group so the llama-server child goes away with the brain.
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
