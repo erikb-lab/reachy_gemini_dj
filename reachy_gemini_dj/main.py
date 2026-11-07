@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
 
-from .audio import AudioPipeline, set_hw_speaker_level
+from .audio import AudioPipeline, LISTEN_MODES, set_hw_speaker_level
 from .backends import VoiceBackend
 from .config import Config
 from .frc import FRC
@@ -60,6 +60,7 @@ class ConfigUpdate(BaseModel):
     nexus_api_key: str | None = None
     tba_api_key: str | None = None
     frc_alerts: bool | None = None
+    listen_mode: str | None = None          # "always" | "push_to_talk"
 
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
@@ -72,6 +73,10 @@ class MemoryAdd(BaseModel):
 
 class MemoryDelete(BaseModel):
     id: str
+
+
+class PttRequest(BaseModel):
+    down: bool
 
 
 class MuteUpdate(BaseModel):
@@ -116,6 +121,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.heard_text = ""
         self.said_text = ""
         self.mic_level = 0.0
+        self.talk_pressed_hooks: list = []
 
         # Subsystems initialized at startup
         self.music = MusicPlayer(volume=self.config.music_volume)
@@ -141,6 +147,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_barge_in=lambda: self.audio_pipe.clear_voice() if self.audio_pipe else None,
             on_heard=self._set_heard_turn,
             on_said=self._set_said,
+            on_state=self._on_brain_state,
             is_speaking=lambda: bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
             tool_specs=self._tool_specs,
             get_frame=self._get_frame,
@@ -166,6 +173,21 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
+
+    # Callbacks run whenever talk is pressed (push-to-talk button, space bar, /api/ptt). Other features append here,
+    # e.g. timers: `app.talk_pressed_hooks.append(timers.dismiss_alarm)`. Each is called with no arguments.
+    def _on_talk_pressed(self) -> None:
+        for fn in list(self.talk_pressed_hooks):
+            try:
+                fn()
+            except Exception:
+                log.exception("talk-pressed hook failed")
+
+    def _on_brain_state(self, state: str, detail: str = "") -> None:
+        """Local brain reported its state: tilt the head while it thinks (never for Gemini Live)."""
+        m = self.motion
+        if m is not None:
+            m.thinking(state == "thinking")
 
     def _get_frame(self):
         media = getattr(self._mini, "media", None)
@@ -224,6 +246,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 "error": g_err,
                 "muted": self.muted,
                 "mic_level": self.mic_level,
+                "listen_mode": self.audio_pipe.listen_mode if self.audio_pipe else self.config.listen_mode,
+                "ptt_active": bool(self.audio_pipe and self.audio_pipe.ptt_active),
                 "heard": self.heard_text,
                 "said": self.said_text,
                 "ffmpeg": bool(shutil.which("ffmpeg")),
@@ -249,6 +273,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "frc_team": self.config.frc_team,
                     "frc_event": self.config.frc_event,
                     "frc_alerts": self.config.frc_alerts,
+                    "listen_mode": self.config.listen_mode,
                     "nexus_key_set": bool(self.config.nexus_api_key),
                     "tba_key_set": bool(self.config.tba_api_key),
                     "nexus_linked": bool(self.config.nexus_link),
@@ -265,6 +290,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
             d = data.model_dump(exclude_unset=True)
             if d.get("brain_url") and not str(d["brain_url"]).strip().lower().startswith(("ws://", "wss://")):
                 return {"ok": False, "error": "Brain URL must start with ws:// or wss://"}
+            if d.get("listen_mode") is not None and d["listen_mode"] not in LISTEN_MODES:
+                return {"ok": False, "error": "listen_mode must be one of: " + ", ".join(LISTEN_MODES)}
             if d.get("music_volume") is not None:
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:
@@ -286,6 +313,28 @@ class ReachyGeminiDJ(ReachyMiniApp):
             if self.audio_pipe:
                 self.audio_pipe.set_mute(self.muted)
             return {"ok": True, "muted": self.muted}
+
+        # Push-to-talk. This is the whole API a physical button needs (ESP32 over Wi-Fi/BLE bridge, USB foot pedal or
+        # presenter clicker via a tiny script, ...); no auth, so it is only as private as the robot's network:
+        #   POST /api/ptt         {"down": true}   press   (start sending the mic; barge-in if Reachy is talking)
+        #   POST /api/ptt         {"down": false}  release (~0.9 s of silence is sent so the utterance ends promptly)
+        #   POST /api/ptt/toggle  (no body)        tap to start, tap again to stop, for one-button devices
+        # Reply: {"ok": true, "listen_mode": "...", "ptt_active": bool}. Holding for more than 30 s auto-releases.
+        # In listen_mode "always" a press only does the barge-in / talk-pressed hooks; the mic is untouched.
+        # GET /api/state shows "listen_mode" and "ptt_active". Set the mode with POST /api/config {"listen_mode": ...}.
+        @app.post("/api/ptt")
+        def ptt(req: PttRequest):
+            if not self.audio_pipe:
+                return {"ok": False, "error": "Audio not ready", "ptt_active": False}
+            active = self.audio_pipe.ptt_set(req.down)
+            return {"ok": True, "listen_mode": self.audio_pipe.listen_mode, "ptt_active": active}
+
+        @app.post("/api/ptt/toggle")
+        def ptt_toggle():
+            if not self.audio_pipe:
+                return {"ok": False, "error": "Audio not ready", "ptt_active": False}
+            active = self.audio_pipe.ptt_toggle()
+            return {"ok": True, "listen_mode": self.audio_pipe.listen_mode, "ptt_active": active}
 
         @app.post("/api/new_conversation")
         def new_conversation():
@@ -507,6 +556,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             music=self.music,
             on_level=lambda lvl: setattr(self, "mic_level", lvl),
             on_pcm_chunk=self.voice.push_mic,
+            on_talk_pressed=self._on_talk_pressed,
         )
 
         # Start background pipelines

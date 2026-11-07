@@ -39,6 +39,8 @@ class Config:
     tba_api_key: str = ""
     nexus_link: str = ""          # private team link from the Nexus QR; never shown or sent anywhere
     frc_alerts: bool = True
+    # How the mic is used: "always" = always listening; "push_to_talk" = only while talk is held (loud events)
+    listen_mode: str = "always"
 
     @property
     def effective_model(self) -> str:
