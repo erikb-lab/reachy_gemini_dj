@@ -23,6 +23,7 @@ from .audio import AudioPipeline, set_hw_speaker_level
 from .backends import VoiceBackend
 from .config import Config
 from .frc import FRC
+from .timers import Timers
 from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
@@ -67,6 +68,10 @@ VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_i
 
 class MuteUpdate(BaseModel):
     muted: bool
+
+
+class TimerCancel(BaseModel):
+    id: int
 
 
 class MoveRequest(BaseModel):
@@ -147,6 +152,15 @@ class ReachyGeminiDJ(ReachyMiniApp):
         # FRC: Nexus QR scan, live queuing alerts, Blue Alliance rankings (tools run on the robot; keys stay here)
         self.frc = FRC(self.config, get_frame=self._get_frame, say=self.voice.say, on_event=self.record_event)
         self.gemini_session.frc = self.frc
+
+        # Timers / reminders / alarms: persisted, rung through the voice backend; user speech dismisses a ringing one
+        self.timers = Timers(
+            say=self.voice.say, on_event=self.record_event, music=self.music,
+            play_pcm=lambda pcm: self.audio_pipe.play_voice(pcm) if self.audio_pipe else None,
+            user_speech_age=lambda: (time.monotonic() - (self.audio_pipe._last_user_speech - 0.7))
+            if self.audio_pipe else 1e9,
+        )
+        self.gemini_session.timers = self.timers
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
@@ -238,6 +252,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "nexus_linked": bool(self.config.nexus_link),
                 },
                 "frc": dict(self.frc.status),
+                "timers": self.timers.status(),
                 "music": self.music.get_status(),
                 "google": self.google_account.public(),
                 "motion": m_status,
@@ -327,6 +342,15 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 return {"ok": True, "result": res}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
+
+        @app.post("/api/timers/cancel")
+        def timers_cancel(req: TimerCancel):
+            res = self.timers.cancel_id(req.id)
+            return {"ok": "error" not in res, **res}
+
+        @app.post("/api/timers/stop")
+        def timers_stop():
+            return {"ok": True, **self.timers.stop_alarm()}
 
         @app.post("/api/frc/scan")
         def frc_scan():
@@ -445,6 +469,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.audio_pipe.start()
         self.voice.start()
         self.frc.start()
+        self.timers.motion = self.motion
+        self.timers.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
@@ -465,6 +491,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception:
                 pass
         self.frc.stop()
+        self.timers.stop()
         self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()

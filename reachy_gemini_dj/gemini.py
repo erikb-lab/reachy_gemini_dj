@@ -229,6 +229,49 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 },
             ),
         ),
+        # Timers, reminders, alarms (see timers.py; parsing of the free text happens there)
+        types.FunctionDeclaration(
+            name="set_timer",
+            description="Start a countdown timer, or a reminder if label says what for.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "duration": types.Schema(type="STRING", description="Length as spoken, e.g. '10 minutes', 'an hour and a half'."),
+                    "label": types.Schema(type="STRING", description="Optional: timer name or what to remind about."),
+                },
+                required=["duration"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="set_alarm",
+            description="Set an alarm for a clock time (next occurrence).",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "time": types.Schema(type="STRING", description="Clock time as spoken, e.g. '7:30 am', '19:30', '7 tonight'."),
+                    "label": types.Schema(type="STRING", description="Optional: alarm name or what to remind about."),
+                },
+                required=["time"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_timers",
+            description="List active timers, reminders and alarms.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="cancel_timer",
+            description="Cancel a timer or alarm by label or length, 'all', or empty for the latest.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"which": types.Schema(type="STRING", description="Label, length, 'all', or empty.")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="stop_alarm",
+            description="Silence a timer or alarm that is ringing.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
     ]
 
     tools = [types.Tool(function_declarations=declarations)]
@@ -518,6 +561,10 @@ class GeminiSession:
                 if self.motion:
                     return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
                 return {"error": "Robot motion not ready yet"}
+
+            elif name in ("set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm"):
+                timers = getattr(self, "timers", None)
+                return timers.handle(name, args) if timers else {"error": "Timers are not ready yet"}
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)
