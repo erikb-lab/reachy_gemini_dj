@@ -26,9 +26,15 @@ def load16k(path):
 STUBS = {
     "frc_team_info": {"team": "1678", "name": "Citrus Circuits", "from": "Davis, California", "rookie_year": 2005,
                       "results_2025": [{"event": "Sacramento Regional", "qual_rank": 1, "record": "11-1-0",
-                                        "playoffs": "f"}]},
-    "frc_next_match": {"team": "1678", "next_match": "Qualification 12", "status": "Queuing soon",
-                       "estimated_start": "in about 15 minutes", "alliance": "red"},
+                                        "playoffs": "f"}],
+                      "say": "Team 1678 is Citrus Circuits, from Davis, California. They started in 2005. In 2025 at "
+                             "Sacramento Regional they ranked first with a record of 11-1-0 and made it to the finals."},
+    "frc_next_match": {"team": "1678", "match": "Qualification 12", "status": "Queuing soon",
+                       "start": "in about 15 minutes", "alliance": "red", "partners": ["254", "971"],
+                       "opponents": ["118", "148", "2056"],
+                       "say": "Our next match is Qualification 12, in about 15 minutes. We're on the red alliance with "
+                              "team 254, The Cheesy Poofs, 9-1-0, and team 971, Spartan Robotics, 7-3-0. Against "
+                              "team 118, team 148 and team 2056."},
 }
 
 
@@ -42,9 +48,32 @@ async def main(url, out, wavs):
         frame_b64 = base64.b64encode(Path(os.environ["FRAME_JPEG"]).read_bytes()).decode()
     lean = os.environ.get("LEAN") == "1"
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
+    # real timer and memory tools (stored in the output dir), so their spoken "say" answers are the app's own
+    from reachy_gemini_dj.memory import Memory
+    from reachy_gemini_dj.timers import Timers
+    for p in ("timers.json", "memory.json"):
+        (out / p).unlink(missing_ok=True)
+    timers, memory = Timers(path=out / "timers.json"), Memory(out / "memory.json")
+    pinned = [m for m in os.environ.get("MEMORY", "").split(";") if m.strip()]
+
+    def robot_tool(name, args):
+        if name in STUBS:
+            return STUBS[name]
+        if name in ("set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm"):
+            return timers.handle(name, args)
+        if name == "remember":
+            return memory.tool_remember(args.get("fact", ""))
+        if name == "forget":
+            return memory.tool_forget(args.get("fact", ""))
+        if name == "list_memories":
+            return memory.tool_list()
+        if name == "play_music":
+            return {"result": f"Queued: {args.get('query', '')}"}
+        return {"result": "done"}
     results = []
     async with websockets.connect(url, max_size=8 << 20) as ws:
-        await ws.send(json.dumps({"type": "hello", "tools": robot_tool_specs(google_services=set(), frc_enabled=True) if lean else robot_tool_specs(), "allow_gemini_assist": False}))
+        await ws.send(json.dumps({"type": "hello", "tools": robot_tool_specs(google_services=set(), frc_enabled=True) if lean else robot_tool_specs(), "allow_gemini_assist": False,
+                                  "memory": pinned}))
         for w in wavs:
             pcm = load16k(w) + bytes(16000 * 2)          # speech + 1 s silence to close the utterance
             rec = {"wav": Path(w).name, "events": [], "tools": []}
@@ -73,8 +102,7 @@ async def main(url, out, wavs):
                     rec["events"].append([t, m.get("text")])
                 elif t == "tool_call":
                     rec["tools"].append([m["name"], m.get("args")])
-                    res = STUBS.get(m["name"]) or ({"result": f"Queued: {m['args'].get('query', '')}"}
-                                                   if m["name"] == "play_music" else {"result": "done"})
+                    res = robot_tool(m["name"], m.get("args") or {})
                     await ws.send(json.dumps({"type": "tool_result", "id": m["id"], "result": res}))
                 elif t == "request_frame":
                     await ws.send(json.dumps({"type": "frame", "id": m["id"], "jpeg_b64": frame_b64}))

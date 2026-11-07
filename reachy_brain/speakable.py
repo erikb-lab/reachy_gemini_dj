@@ -79,7 +79,7 @@ def speakable(text: str) -> str:
     # after a team number gets slurred otherwise); a bare "120-98" -> "one hundred twenty to ninety eight"
     t = re.sub(r"(?i)\b(won|lost|tied)\s+(?=\d{1,3}-\d{1,3}\b)", r"\1 by a score of ", t)
     t = re.sub(r"\b(\d{1,3})-(\d{1,3})\b", lambda m: f"{int_words(int(m.group(1)))} to {int_words(int(m.group(2)))}", t)
-    t = re.sub(r"(\d{1,2}):(\d{2})\s*([ap])\.?m\.?", lambda m: _clock(m.group(1), m.group(2)) + (" a m" if m.group(3).lower() == "a" else " p m"), t, flags=re.I)
+    t = re.sub(r"(\d{1,2}):(\d{2})\s*([ap])\.?m\b(?:(\.)(?=\s*$|\s+(?-i:[A-Z]))|\.)?", lambda m: _clock(m.group(1), m.group(2)) + (" a m" if m.group(3).lower() == "a" else " p m") + (m.group(4) or ""), t, flags=re.I)
     t = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: _clock(m.group(1), m.group(2)), t)
     t = re.sub(r"\b(\d+)(?:st|nd|rd|th)\b", lambda m: _ordinal(int(m.group(1))), t)
     t = re.sub(r"(\d+)\s*%", lambda m: m.group(1) + " percent", t)
@@ -90,6 +90,8 @@ def speakable(text: str) -> str:
     # "team one six seven eight won ..." is heard as "...eight one": "has won" keeps the number and the word apart
     t = re.sub(r"(?i)\b((?:teams?|frc)\s+(?:(?:zero|one|two|three|four|five|six|seven|eight|nine)\s+)+)won\b",
                r"\1has won", t)
+    # pit and seat codes: "A3" -> "A three", "B12" -> "B twelve" (otherwise TTS says "Athree")
+    t = re.sub(r"\b([A-Za-z]{1,2})(\d{1,4})\b", r"\1 \2", t)
     t = re.sub(r"\d+", lambda m: _number(m.group(0)), t)
     return t
 

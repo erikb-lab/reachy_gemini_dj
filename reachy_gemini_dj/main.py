@@ -180,10 +180,12 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.timers = Timers(
             say=self.voice.say, on_event=self.record_event, music=self.music,
             play_pcm=lambda pcm: self.audio_pipe.play_voice(pcm) if self.audio_pipe else None,
+            # In push-to-talk mode loud rooms are the norm, so mic noise never dismisses; the talk button does.
             user_speech_age=lambda: (time.monotonic() - (self.audio_pipe._last_user_speech - 0.7))
-            if self.audio_pipe else 1e9,
+            if self.audio_pipe and self.config.listen_mode != "push_to_talk" else 1e9,
         )
         self.gemini_session.timers = self.timers
+        self.talk_pressed_hooks.append(self.timers.dismiss)
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
@@ -254,7 +256,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.5.1",
+                "version": "0.6.0",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
@@ -560,7 +562,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                                 frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.5.1...")
+        log.info("Starting Reachy Gemini DJ v0.6.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot
