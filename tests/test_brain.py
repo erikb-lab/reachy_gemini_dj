@@ -597,3 +597,292 @@ def test_unsent_tool_results_are_stubbed_in_history():
     _compact_unsent(msgs, [(0, {"big": "x" * 900, "say": "hi"})])
     assert msgs[0] == {"role": "tool", "tool_call_id": "a", "content": '{"ok": true}'}
     assert "nope" in _compact({"error": "nope"})
+
+
+# ---------- v0.7 shortcuts: music queue/volume/favorites/seek, play args, local answers, quiet mode ----------
+def test_music_shortcuts_map_to_tools_and_args():
+    from reachy_brain.session import quick_command as q
+    cases = {
+        "What's playing?": ("music_queue", {"action": "now_playing"}),
+        "what song is this": ("music_queue", {"action": "now_playing"}),
+        "What is this song?": ("music_queue", {"action": "now_playing"}),
+        "who sings this": ("music_queue", {"action": "now_playing"}),
+        "what's next": ("music_queue", {"action": "list"}),
+        "What's in the queue?": ("music_queue", {"action": "list"}),
+        "what's up next": ("music_queue", {"action": "list"}),
+        "clear the queue": ("music_queue", {"action": "clear"}),
+        "shuffle the queue": ("music_queue", {"action": "shuffle"}),
+        "shuffle the music": ("music_queue", {"action": "shuffle"}),
+        "shuffle it": ("music_queue", {"action": "shuffle"}),
+        "louder": ("adjust_volume", {"direction": "up"}),
+        "Turn it up!": ("adjust_volume", {"direction": "up"}),
+        "volume up": ("adjust_volume", {"direction": "up"}),
+        "a bit louder": ("adjust_volume", {"direction": "up"}),
+        "quieter": ("adjust_volume", {"direction": "down"}),
+        "turn it down": ("adjust_volume", {"direction": "down"}),
+        "volume down": ("adjust_volume", {"direction": "down"}),
+        "softer": ("adjust_volume", {"direction": "down"}),
+        "save this song": ("favorite_song", {"action": "save"}),
+        "I like this song": ("favorite_song", {"action": "save"}),
+        "add this to my favorites": ("favorite_song", {"action": "save"}),
+        "favorite this": ("favorite_song", {"action": "save"}),
+        "play my favorites": ("favorite_song", {"action": "play"}),
+        "keep the music going": ("music_queue", {"action": "autoplay_on"}),
+        "stop after this song": ("music_queue", {"action": "autoplay_off"}),
+        "play the next song": ("skip_music", {}),
+        "skip to the next song": ("skip_music", {}),
+        "skip": ("skip_music", {}),
+        "Please pause the music.": ("pause_music", {}),
+    }
+    for heard, (tool, args) in cases.items():
+        got = q(heard)
+        assert got and got[0] == tool and got[2] == args, (heard, got)
+
+
+def test_music_shortcuts_do_not_steal_real_requests():
+    from reachy_brain.session import quick_command as q, local_answer as la
+    for heard in ["what's next on my calendar", "what's playing at the cinema", "what's next for team 254",
+                  "turn it up to eleven", "shuffle the cards", "clear the table",
+                  "I like this song a lot, who is it", "play my favorite song by queen", "add this to my shopping list",
+                  "turn the lights up", "help me remember my locker code", "what's the date of the next match",
+                  "play some louder music", "what song is this from"]:
+        assert q(heard) is None, heard
+        assert la(heard, {"play_music"}) is None, heard
+    assert q("keep going")[0] == "resume_music"                      # existing behaviour kept
+
+
+def test_music_shortcut_only_fires_when_tool_is_advertised_and_speaks_say():
+    s, llm, sent, _ = make([(["It is quiet."], [])], heard="What's playing?")
+    run_turn(s, sent)                                  # no music_queue tool: the model gets it
+    assert len(llm.calls) == 1
+    s.close()
+    s, llm, sent, _ = make([], heard="what's playing", robot={"music_queue": {"say": "Daft Punk, Get Lucky."}})
+    add_tools(s, ("music_queue", "info"))
+    run_turn(s, sent)
+    call = next(m for m in sent if m.get("type") == "tool_call")
+    assert llm.calls == [] and call["name"] == "music_queue" and call["args"] == {"action": "now_playing"}
+    assert said(sent) == ["Daft Punk, Get Lucky."]
+    assert s.turns[-1][2]["content"] == '{"ok": true}'                # stored as a stub, not the result
+    s.close()
+    s, llm, sent, _ = make([], heard="turn it up", robot={"adjust_volume": {"ok": True}})
+    add_tools(s, ("adjust_volume", "action"))
+    run_turn(s, sent)
+    assert llm.calls == [] and said(sent) == ["Louder."]              # fallback text when there is no say
+    s.close()
+
+
+def test_play_args_parsed_without_llm():
+    from reachy_brain.session import quick_command as q
+    assert q("play daft punk next") == ("play_music", "Okay, queuing that up.", {"query": "daft punk", "when": "next"})
+    assert q("Play get lucky now.")[2] == {"query": "get lucky", "when": "now"}
+    assert q("play get lucky right now")[2] == {"query": "get lucky", "when": "now"}
+    assert q("queue up 3 jazz songs")[2] == {"query": "jazz", "count": 3}
+    assert q("queue up three songs by daft punk")[2] == {"query": "daft punk", "count": 3}
+    assert q("play 5 songs by queen")[2] == {"query": "queen", "count": 5}
+    assert q("play 50 songs by queen") is None and q("play 0 songs by queen") is None
+    assert q("play it now") is None and q("play music next") is None and q("play some daft punk") is None
+    assert q("play the game now") is None
+
+
+def test_play_intents_and_hints():
+    from reachy_brain.session import forced_tool, play_hint
+    allt = {"play_music", "web_search", "frc_next_match", "set_timer"}
+    for heard in ["add thriller to the queue", "queue up some abba", "play the latest hits next",
+                  "play something by queen now", "play 3 songs from the eighties", "play three songs by abba"]:
+        assert forced_tool(heard, allt) == "play_music", heard
+    assert forced_tool("when do we play next", allt) != "play_music"
+    assert forced_tool("add a timer to the queue", allt) != "play_music"
+    assert forced_tool("play the queue now", {"web_search"}) is None
+    assert play_hint("play thriller next") == '; use when="next"'
+    assert play_hint("play thriller now") == '; use when="now"'
+    assert play_hint("add thriller to the queue") == '; use when="last"'
+    assert play_hint("play 3 songs by abba") == "; use count=3"
+    assert play_hint("play three songs by abba") == "; use count=3"
+    assert play_hint("play some abba") == ""
+
+
+def test_play_hint_reaches_the_llm():
+    s, llm, sent, _ = make([([], [("play_music", '{"query": "thriller", "when": "next"}')])],
+                           heard="add thriller to the queue next")
+    run_turn(s, sent)
+    assert llm.calls[0]["choice"] == "required"
+    assert 'Call play_music first; use when="next". Do not answer from memory.' in llm.calls[0]["msgs"][-1]["content"]
+    s.close()
+
+
+def test_play_next_by_voice_skips_the_llm_and_passes_args():
+    s, llm, sent, _ = make([], heard="play daft punk next", robot={"play_music": {"say": "Daft Punk is up next."}})
+    run_turn(s, sent)
+    call = next(m for m in sent if m.get("type") == "tool_call")
+    assert llm.calls == [] and call["args"] == {"query": "daft punk", "when": "next"}
+    assert said(sent) == ["Daft Punk is up next."]
+    s.close()
+
+
+def test_seek_shortcuts():
+    from reachy_brain.session import quick_command as q
+
+    def to(h):
+        got = q(h)
+        return got[2]["to"] if got and got[0] == "seek_music" else got
+    assert to("skip to 1:30") == "1:30" and to("Skip to 1.30.") == "1:30" and to("go to 1:15") == "1:15"
+    assert to("skip to one thirty") == "1:30" and to("jump to two fifteen") == "2:15"
+    assert to("jump to 2 minutes") == "2 minutes" and to("jump to two minutes") == "2 minutes"
+    assert to("go to 90 seconds") == "90 seconds" and to("skip to 1 30") == "1:30"
+    assert to("skip to the beginning") == "start"
+    assert to("skip ahead 30 seconds") == "+30" and to("go forward 30 seconds") == "+30"
+    assert to("fast forward thirty seconds") == "+30" and to("fast forward") == "+10"
+    assert to("skip ahead a minute") == "+60" and to("skip forward") == "+10"
+    assert to("go back 10 seconds") == "-10" and to("rewind 15 seconds") == "-15" and to("rewind a bit") == "-10"
+    assert to("rewind") == "-10"
+    assert to("start the song over") == "start" and to("restart the song") == "start" and to("from the beginning") == "start"
+    assert q("skip")[0] == "skip_music"
+    assert q("skip to the next song")[0] == "skip_music"
+    for neg in ["go back to my calendar", "skip to the end of my homework", "go to 7",
+                "go back to the first slide", "rewind the story of team 254", "skip ahead to next week",
+                "go to 25:99"]:
+        got = q(neg)
+        assert got is None or got[0] != "seek_music", (neg, got)
+
+
+def test_seek_only_when_advertised_and_speaks_say():
+    s, llm, sent, _ = make([(["Sorry."], [])], heard="skip to 1:30")
+    run_turn(s, sent)
+    assert len(llm.calls) == 1 and not any(m.get("type") == "tool_call" for m in sent)
+    s.close()
+    s, llm, sent, _ = make([], heard="skip to 1:30", robot={"seek_music": {"say": "Jumped to 1:30."}})
+    add_tools(s, ("seek_music", "action"))
+    run_turn(s, sent)
+    call = next(m for m in sent if m.get("type") == "tool_call")
+    assert llm.calls == [] and call["name"] == "seek_music" and call["args"] == {"to": "1:30"}
+    assert said(sent) == ["Jumped to 1:30."]
+    s.close()
+
+
+def test_local_answers():
+    import datetime
+    from reachy_brain.session import local_answer as la, _HELP_AREAS
+    now = datetime.datetime(2026, 11, 6, 21, 42)
+    assert la("What time is it?", set(), now=now) == ("It's 9:42 PM.", True)
+    assert la("what's the time", set(), now=now)[0] == "It's 9:42 PM."
+    assert la("what time is it", set(), now=datetime.datetime(2026, 11, 6, 0, 5))[0] == "It's 12:05 AM."
+    assert la("What's the date?", set(), now=now)[0] == "It's Friday, November 6."
+    assert la("what day is it", set(), now=now)[0] == "It's Friday, November 6."
+    assert la("say that again", set(), "Sunny and 70.") == ("Sunny and 70.", False)
+    for p in ["repeat that", "what did you say", "come again"]:
+        assert la(p, set(), "Hello there.")[0] == "Hello there."
+    assert la("repeat that", set()) == ("I haven't said anything yet.", False)
+    for p in ["never mind", "Nevermind.", "cancel", "forget it", "nothing"]:
+        assert la(p, set()) == ("Okay.", False), p
+    h = la("what can you do", {"play_music", "robot_emotion", "get_weather", "set_timer", "remember", "frc_rankings"})[0]
+    assert h == "I can help with music, moves and emotions, weather and web, timers and alarms, memory, and FRC. Just ask!"
+    assert la("help", {"look"})[0] == "I can help with camera. Just ask!"
+    assert la("help", set())[0].startswith("I can chat")
+    assert "camera" not in la("what are your features", {"play_music"})[0]
+    full = la("help", {t for _, ns in _HELP_AREAS for t in ns})[0]
+    assert len(full.split()) < 35
+    for neg in ["help me remember my locker code", "remember that I need help", "forget about the pit",
+                "cancel the timer", "cancel my alarm", "what time is the next match", "what's the date of the final",
+                "what day is the competition", "nothing else matters by metallica", "never mind the music, play jazz",
+                "say that again in french", "what time is it in tokyo", "can you help me with my homework"]:
+        assert la(neg, {"remember", "play_music"}) is None, neg
+
+
+def test_local_answers_skip_llm_and_are_not_stored():
+    s, llm, sent, _ = make([], heard="What time is it?")
+    run_turn(s, sent)
+    assert llm.calls == [] and s.turns == []
+    assert said(sent)[0].startswith("It's ") and said(sent)[0].endswith("M.")
+    s.close()
+    # "say that again" repeats the last real answer, not a filler; "never mind" says Okay and keeps it
+    s, llm, sent, _ = make([(["It is sunny."], [])], heard="what's the weather")
+    run_turn(s, sent)
+    assert said(sent) == ["Let me check the weather.", "It is sunny."] and s._last_said == "It is sunny."
+    s.stt.text = "say that again"
+    sent.clear()
+    run_turn(s, sent)
+    assert said(sent) == ["It is sunny."] and len(llm.calls) == 1
+    s.stt.text = "never mind"
+    sent.clear()
+    run_turn(s, sent)
+    assert said(sent) == ["Okay."] and s._last_said == "It is sunny." and len(s.turns) == 1
+    s.close()
+    s, llm, sent, _ = make([], heard="come again")
+    run_turn(s, sent)
+    assert said(sent) == ["I haven't said anything yet."] and llm.calls == []
+    s.close()
+
+
+def test_help_me_remember_still_goes_to_remember():
+    from reachy_brain.session import forced_tool
+    assert forced_tool("remember that I need help", {"remember", "web_search"}) == "remember"
+    s, llm, sent, _ = make([([], [("remember", '{"fact": "locker 12"}')])], heard="help me remember that my locker is 12")
+    add_tools(s, ("remember", "action"))
+    run_turn(s, sent)
+    assert "Call remember first" in llm.calls[0]["msgs"][-1]["content"]   # went to the model, not the help shortcut
+    s.close()
+
+
+def test_quiet_mode_shortcuts():
+    from reachy_brain.session import quick_command as q
+    assert q("go to sleep") == ("quiet_mode", "Okay, quiet for 30 minutes.", {"minutes": 30})
+    assert q("Stop listening.")[2] == {"minutes": 30} and q("take a break")[2] == {"minutes": 30}
+    assert q("be quiet for 10 minutes")[2] == {"minutes": 10}
+    assert q("be quiet for ten minutes")[2] == {"minutes": 10}
+    assert q("go to sleep for an hour")[2] == {"minutes": 60} and q("be quiet for half an hour")[2] == {"minutes": 30}
+    assert q("be quiet for 2 hours")[2] == {"minutes": 120}
+    for neg in ["be quiet", "go to sleep early tonight", "take a break from the music and tell me a joke",
+                "stop listening to rock music", "remind me to take a break"]:
+        got = q(neg)
+        assert got is None or got[0] != "quiet_mode", (neg, got)
+    s, llm, sent, _ = make([], heard="be quiet for 5 minutes", robot={"quiet_mode": {"say": "Quiet for 5 minutes."}})
+    add_tools(s, ("quiet_mode", "action"))
+    run_turn(s, sent)
+    call = next(m for m in sent if m.get("type") == "tool_call")
+    assert llm.calls == [] and call["args"] == {"minutes": 5} and said(sent) == ["Quiet for 5 minutes."]
+    s.close()
+
+
+def test_frc_followups_force_team_info_only_with_team_in_history():
+    from reachy_brain.session import forced_tool
+    allt = {"frc_team_info", "web_search", "play_music", "get_weather"}
+    ctx = "Tell me about team 2491\nTeam 2491 is NorthStar Robotics from Minnesota."
+    for heard in ["I'm asking about their Duluth competition.", "How did they do at Champs in Houston?",
+                  "Please look up all of their information as much as you can.",
+                  "I would like more information on their 2026 season.", "how did we do at the district championship",
+                  "show me all of their history"]:
+        assert forced_tool(heard, allt, ctx) == "frc_team_info", heard
+    assert forced_tool("Tell me about team 2491 Duluth competition this year.", allt) == "frc_team_info"
+    assert forced_tool("How did they do at the game", allt, "we talked about the weather") is None
+    assert forced_tool("How did they do at the game", allt) is None
+    assert forced_tool("how did they do at Champs", allt - {"frc_team_info"}, ctx) != "frc_team_info"
+    assert forced_tool("their 2026 season", allt, "play some music") is None
+
+
+def test_frc_hint_names_args_and_follows_history():
+    s, llm, sent, _ = make([([], [("frc_team_info", "{}")]), (["Ok."], []), ([], [("frc_team_info", "{}")]), (["Ok."], [])],
+                           heard="Tell me about team 2491 at Duluth")
+    add_tools(s, ("frc_team_info", "info"))
+    run_turn(s, sent)
+    assert '(Call frc_team_info first; set event, year or detail="all" if asked. Do not answer from memory.)' in \
+        llm.calls[0]["msgs"][-1]["content"]
+    s.stt.text = "How did they do at Champs in Houston?"
+    sent.clear()
+    run_turn(s, sent)
+    assert llm.calls[2]["choice"] == "required"
+    assert "take the team from the conversation" in llm.calls[2]["msgs"][-1]["content"]
+    s.close()
+
+
+def test_cue_and_q_spellings_and_counts():
+    from reachy_brain.session import quick_command as q, forced_tool, play_hint
+    assert q("Please cue 10 Minecraft songs.") == ("play_music", "Okay, queuing that up.", {"query": "minecraft", "count": 10})
+    assert q("queue 10 minecraft songs")[2] == {"query": "minecraft", "count": 10}
+    assert q("Q up 3 jazz songs")[2] == {"query": "jazz", "count": 3}
+    assert q("cue up three songs by daft punk")[2] == {"query": "daft punk", "count": 3}
+    allt = {"play_music", "web_search"}
+    assert forced_tool("Please cue some abba", allt) == "play_music"
+    assert forced_tool("add thriller to the cue", allt) == "play_music"
+    assert forced_tool("That's only one, I wanted ten songs.", allt) == "play_music"
+    assert play_hint("That's only one, I wanted ten songs.") == "; use count=10"
+    assert forced_tool("I wanted a pizza", allt) is None

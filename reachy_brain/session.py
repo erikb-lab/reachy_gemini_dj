@@ -41,7 +41,7 @@ CANNED_ACK = {
 
 # "play/queue something": the small model sometimes answers "sure, playing it" without calling the tool at all.
 # For these utterances the first round must be a tool call (spoken confirmation comes from CANNED_ACK).
-_MUSIC_INTENT = re.compile(r"\b(play|queue|put on|spin|throw on)\b(?!.*\b(game|role|trick|joke|part)\b)", re.I)
+_MUSIC_INTENT = re.compile(r"\b(play|queue|cue|put on|spin|throw on)\b(?!.*\b(game|role|trick|joke|part)\b)", re.I)
 
 
 # Requests the small model tends to "answer" by making things up instead of calling the tool (seen in the laptop
@@ -83,29 +83,32 @@ FILLERS = {
 }
 
 
-def forced_tool(heard: str, available: set[str]) -> str | None:
-    """Name of the tool this request must start with, or None to let the model decide."""
+_FRC_CONTEXT = re.compile(r"\b(team|frc)\s*\d{1,5}\b|frc_team_info|frc_rankings|frc_next_match", re.I)
+# follow-ups about a team already being discussed ("how did they do at champs", "their 2026 season", ...)
+_FRC_FOLLOW = re.compile(
+    r"\b(how (did|do|are|have) (they|we)\b|(their|our) (\d{4} )?(season|competitions?|events?|records?|history|performance|results?|"
+    r"stats)\b|(their|our) \w+ (competition|event|regional)\b|all (of )?(their|our) (info|information|history|stats|data)|"
+    r"(their|our) \d{4}\b|at (the )?(champs|champions|worlds|championship|regional|district|state)\b|"
+    r"more (info|information) (on|about) (their|our|them|that team)\b)", re.I)
+
+
+def forced_tool(heard: str, available: set[str], recent: str = "") -> str | None:
+    """Name of the tool this request must start with, or None to let the model decide. `recent` is the text of the
+    last few turns: it lets a follow-up with no team number ("how did they do at champs") reach frc_team_info."""
+    if "play_music" in available and _PLAY_ARGS.search(_norm(heard)) and not _PLAY_NOT.search(heard):
+        return "play_music"
+    if "frc_team_info" in available and _FRC_FOLLOW.search(heard) and _FRC_CONTEXT.search(recent):
+        return "frc_team_info"
     for rx, name in _INTENTS:
         if rx.search(heard) and name in available:
             return name
-    if _MUSIC_INTENT.search(heard) and "play_music" in available:
+    if _MUSIC_INTENT.search(_norm(heard)) and "play_music" in available:
         return "play_music"
     return None
 
 
 # What Whisper "hears" in silence or room noise; never a real request.
 GHOST_TRANSCRIPTS = {"you", "thank you", "thanks", "thanks for watching", "bye", "bye bye", "the end"}
-
-
-# Music transport commands need no language model: match them directly (instant, and never mapped to the wrong tool).
-_QUICK = [
-    ("pause_music", "Paused.", re.compile(r"^(please |can you |could you )*(pause|hold)( the| this| that)?( music| song| track| it)?( please)?$")),
-    ("resume_music", "Back to the music.", re.compile(
-        r"^(please |can you |could you )*(resume|unpause|continue|keep going|play)( the| this| that)?"
-        r"( music| song| track| it)?( again| back)?( please)?$")),
-    ("skip_music", "Skipping.", re.compile(r"^(please |can you |could you )*(skip|next)( the| this| that)?( music| song| track| one)?( please)?$")),
-    ("stop_music", "Music stopped.", re.compile(r"^(please |can you |could you )*stop( the| this| that)?( music| song| track| playing)( please)?$")),
-]
 
 
 _PLEASE = r"(?:please |can you |could you |hey reachy )*"
@@ -120,14 +123,174 @@ _QUICK_TIMER = [re.compile(rf"^{_PLEASE}(?:set|start|make|create)(?: me)?(?: a| 
 _QUICK_CANCEL = re.compile(rf"^{_PLEASE}(?:cancel|delete|clear)(?: the| my| all| all of my| all my)? (?P<t>timers?)$")
 _QUICK_STOP_ALARM = re.compile(rf"^{_PLEASE}(?:stop|turn off|silence|dismiss|shut off)(?: the| my)? alarm$")
 
+_NUMWORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+             "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+             "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30,
+             "forty": 40, "forty five": 45, "fifty": 50, "sixty": 60, "ninety": 90}
+_N10 = r"\d+|one|two|three|four|five|six|seven|eight|nine|ten"
+
+
+def _norm(heard: str) -> str:
+    t = heard.lower().replace("’", "'")
+    t = re.sub(r"[^a-z0-9.:' ]", " ", t)
+    t = " ".join(t.split()).rstrip(". :")
+    # Whisper writes "queue" as "cue" / "Q" ("please cue 10 minecraft songs", "add it to the q")
+    t = re.sub(r"^((?:please |can you |could you |hey reachy )*)(?:cue|q|kew)\b", r"\1queue", t)
+    return re.sub(r"\bto (the|my) (?:cue|q|kew)\b", r"to \1 queue", t)
+
+
+def _num(word: str) -> int | None:
+    w = word.strip().lower()
+    return int(w) if w.isdigit() else _NUMWORDS.get(w)
+
+
+# Music transport / queue / volume / favorites shortcuts: (tool, fallback ack, args, whole-utterance pattern).
+# They only fire when the robot advertises the tool; the robot's {"say": ...} is spoken in preference to the ack.
+_QUICK = [
+    ("pause_music", "Paused.", {}, re.compile(r"^(please |can you |could you )*(pause|hold)( the| this| that)?( music| song| track| it)?( please)?$")),
+    ("resume_music", "Back to the music.", {}, re.compile(
+        r"^(please |can you |could you )*(resume|unpause|continue|keep going|play)( the| this| that)?"
+        r"( music| song| track| it)?( again| back)?( please)?$")),
+    ("skip_music", "Skipping.", {}, re.compile(
+        r"^(please |can you |could you )*(skip|next|play( the)? next|skip to( the)? next)( the| this| that)?( music| song| track| one)?( please)?$")),
+    ("stop_music", "Music stopped.", {}, re.compile(r"^(please |can you |could you )*stop( the| this| that)?( music| song| track| playing)( please)?$")),
+    ("music_queue", "Let me check.", {"action": "now_playing"}, re.compile(
+        rf"^{_PLEASE}(?:what'?s|what is|whats) (?:currently |now )?playing(?: right now| now)?$|"
+        rf"^{_PLEASE}(?:what'?s|what is|whats) (?:this|that)(?: song| track)?(?: playing)?$|"
+        rf"^{_PLEASE}what (?:song|track) is (?:this|that|playing)(?: right now| now)?$|"
+        rf"^{_PLEASE}who (?:sings|is singing|plays|is playing) (?:this|that)(?: song| track)?$|"
+        rf"^{_PLEASE}who'?s singing(?: this| that)?$")),
+    ("music_queue", "Let me check.", {"action": "list"}, re.compile(
+        rf"^{_PLEASE}(?:what'?s|what is|whats) (?:up )?next(?: in the queue| in line)?$|"
+        rf"^{_PLEASE}(?:what'?s|what is|whats) (?:in|on) the (?:queue|playlist)$|"
+        rf"^{_PLEASE}(?:what'?s|what is) coming up(?: next)?$|"
+        rf"^{_PLEASE}(?:show|list|read)(?: me| out)?(?: the| my) (?:queue|playlist)$")),
+    ("music_queue", "Queue cleared.", {"action": "clear"}, re.compile(
+        rf"^{_PLEASE}(?:clear|empty)(?: out)?(?: the| my)? (?:queue|playlist)$")),
+    ("music_queue", "Shuffled.", {"action": "shuffle"}, re.compile(
+        rf"^{_PLEASE}shuffle(?: up)? (?:the queue|the music|it|my music|the playlist|the songs)(?: please)?$")),
+    ("music_queue", "Okay, I'll keep the music going.", {"action": "autoplay_on"}, re.compile(
+        rf"^{_PLEASE}(?:keep the music (?:going|playing)|keep it (?:going|playing)|keep playing (?:music|songs)|"
+        rf"(?:turn on|enable|start) autoplay)$")),
+    ("music_queue", "Okay, I'll stop after this song.", {"action": "autoplay_off"}, re.compile(
+        rf"^{_PLEASE}(?:stop after this (?:song|track|one)|(?:turn off|disable) autoplay|don'?t keep the music going)$")),
+    ("adjust_volume", "Louder.", {"direction": "up"}, re.compile(
+        rf"^{_PLEASE}(?:make it |a (?:bit|little) |bit |little )?louder(?: please)?$|"
+        rf"^{_PLEASE}turn (?:it|that|the (?:music|volume)) up(?: a bit| a little)?(?: please)?$|"
+        rf"^{_PLEASE}turn up the (?:volume|music)(?: a bit| a little)?(?: please)?$|"
+        rf"^{_PLEASE}(?:volume up|raise the volume|crank it up)(?: please)?$")),
+    ("adjust_volume", "Quieter.", {"direction": "down"}, re.compile(
+        rf"^{_PLEASE}(?:make it |a (?:bit|little) |bit |little )?(?:quieter|softer)(?: please)?$|"
+        rf"^{_PLEASE}turn (?:it|that|the (?:music|volume)) down(?: a bit| a little)?(?: please)?$|"
+        rf"^{_PLEASE}turn down the (?:volume|music)(?: a bit| a little)?(?: please)?$|"
+        rf"^{_PLEASE}(?:volume down|lower the volume|not so loud)(?: please)?$")),
+    ("favorite_song", "Saved to your favorites.", {"action": "save"}, re.compile(
+        rf"^{_PLEASE}(?:save (?:this|that)(?: song| track| one)?|i (?:like|love) (?:this|that)(?: song| track| one)?|"
+        rf"add (?:this|that)(?: song| track| one)? to (?:my )?favou?rites?(?: songs| list)?|"
+        rf"favou?rite (?:this|that)(?: song| track| one)?)$")),
+    ("favorite_song", "Playing your favorites.", {"action": "play"}, re.compile(
+        rf"^{_PLEASE}play (?:my |our )?(?:favou?rites|favou?rite (?:songs|music|tracks))$")),
+]
+
+# "go to sleep" -> quiet_mode: the robot mutes its mic until the talk button / page / timeout wakes it
+_QUIET_FOR = rf" for (?P<n>half an|{_NUM})(?: (?P<u>{_UNIT}))?"
+_QUICK_QUIET = [
+    re.compile(rf"^{_PLEASE}(?:go to sleep|go to bed|stop listening|take a break|go quiet)(?:{_QUIET_FOR})?(?: for now)?$"),
+    re.compile(rf"^{_PLEASE}(?:be quiet|be silent|quiet down|sleep|take a nap){_QUIET_FOR}$"),
+]
+
+
+def _quiet_minutes(m: re.Match) -> int:
+    n, u = m.groupdict().get("n"), m.groupdict().get("u")
+    if not n:
+        return 30
+    if n == "half an":
+        return 30                              # "half an hour"
+    val = _num(n)
+    if val is None:
+        try:
+            val = float(n)
+        except ValueError:
+            return 30
+    hours = (u or "minutes").lower().startswith(("hour", "hr"))
+    return max(1, min(int(round(val * (60 if hours else 1))), 24 * 60))
+
+
+# ---------- seek_music: "skip to 1:30", "rewind 10 seconds", "restart the song" ----------
+_SECS = r"(?:seconds?|secs?)"
+_MINS = r"(?:minutes?|mins?)"
+_SEEK_VERB = r"(?:skip|jump|go|seek|fast forward|move|fast forward to)"
+_SEEK_FWD = re.compile(rf"^{_PLEASE}(?:skip|jump|go|fast forward|move)? ?(?:ahead|forward)(?: (?P<n>{_NUM}) (?P<u>{_SECS}|{_MINS}))?(?: a bit| a little)?$|"
+                       rf"^{_PLEASE}fast forward(?: (?P<n2>{_NUM}) (?P<u2>{_SECS}|{_MINS}))?(?: a bit| a little)?$")
+_SEEK_BACK = re.compile(rf"^{_PLEASE}(?:go back|rewind|back up|jump back|skip back|go backwards?|jump backwards?|skip backwards?)"
+                        rf"(?: (?P<n>{_NUM}) (?P<u>{_SECS}|{_MINS}))?(?: a bit| a little)?$")
+_SEEK_START = re.compile(rf"^{_PLEASE}(?:(?:start|play)(?: the| this| that)? (?:song|track|music|it) over|"
+                         rf"restart(?: the| this| that)?(?: song| track| music| it)?|"
+                         rf"(?:play |start |take it |go |skip |jump |seek )?(?:from|to) the (?:beginning|start|top)(?: of the (?:song|track))?)$")
+_SEEK_ABS = re.compile(rf"^{_PLEASE}{_SEEK_VERB} (?:ahead |forward )?to (?:the )?(?P<t>.+)$")
+_SEEK_WORD_MIN = r"one|two|three|four|five|six|seven|eight|nine|ten"
+_SEEK_WORD_SEC = r"fifteen|twenty|thirty|forty five|forty|fifty|ten|five"
+
+
+def _amount(n: str | None, u: str | None, default: int = 10) -> int:
+    if not n:
+        return default
+    v = _num(n)
+    if v is None:
+        try:
+            v = float(n)
+        except ValueError:
+            return default
+    return max(1, int(round(v * (60 if u and u.startswith("min") else 1))))
+
+
+def _seek_time(x: str) -> str | None:
+    """Time text for seek_music from what follows "skip to": 1:30 / 1.30 / 1 30 / one thirty / 2 minutes / the start."""
+    x = x.strip()
+    if re.fullmatch(r"(?:the )?(?:beginning|start|top)(?: of the (?:song|track))?", x):
+        return "start"
+    if m := re.fullmatch(r"(\d{1,2})[:. ](\d{2})", x):
+        return f"{int(m.group(1))}:{m.group(2)}" if int(m.group(2)) < 60 else None
+    if m := re.fullmatch(rf"({_SEEK_WORD_MIN}) (oh )?({_SEEK_WORD_SEC}|{_SEEK_WORD_MIN})", x):
+        sec = _num(m.group(3))
+        if sec is not None and (sec >= 10 or m.group(2)):
+            return f"{_num(m.group(1))}:{sec:02d}"
+    if m := re.fullmatch(rf"(?P<a>{_NUM}) (?P<au>{_SECS}|{_MINS})(?: and (?P<b>{_NUM}) (?P<bu>{_SECS}))?", x):
+        a = _amount(m.group("a"), m.group("au"), 0)
+        if not a:
+            return None
+        if m.group("au").startswith("min"):
+            n = _amount(m.group("a"), "seconds", 0)
+            out = f"{n} minute{'s' if n != 1 else ''}"
+            return out + (f" {_amount(m.group('b'), 'seconds', 0)} seconds" if m.group("b") else "")
+        return f"{a} seconds"
+    return None
+
+
+def seek_command(t: str) -> str | None:
+    """`to` text for seek_music when the normalized utterance is a bare seek request, else None."""
+    if m := _SEEK_FWD.match(t):
+        return f"+{_amount(m.group('n') or m.group('n2'), m.group('u') or m.group('u2'))}"
+    if m := _SEEK_BACK.match(t):
+        return f"-{_amount(m.group('n'), m.group('u'))}"
+    if _SEEK_START.match(t):
+        return "start"
+    if m := _SEEK_ABS.match(t):
+        return _seek_time(m.group("t"))
+    return None
+
+
+# Words that are not a song/artist: "play it now" / "play music next" are left to the model.
+_GENERIC_Q = {"it", "this", "that", "the", "a", "some", "music", "some music", "something", "a song", "some songs",
+              "the music", "the song", "the next", "the next song", "songs", "a track", "something else", "one"}
+
 
 def quick_command(heard: str) -> tuple[str, str, dict] | None:
-    """('tool_name', spoken ack, args) when the whole utterance is a bare music transport / timer command, else None."""
-    t = re.sub(r"[^a-z0-9.' ]", " ", heard.lower())
-    t = " ".join(t.split()).rstrip(". ")
-    for name, ack, rx in _QUICK:
+    """('tool_name', spoken ack, args) when the whole utterance is a bare music / timer / quiet command, else None."""
+    t = _norm(heard)
+    for name, ack, args, rx in _QUICK:
         if rx.match(t):
-            return name, ack, {}
+            return name, ack, dict(args)
     for rx in _QUICK_TIMER:
         if m := rx.match(t):
             return "set_timer", "Done.", {"duration": m.group("dur")}
@@ -135,7 +298,96 @@ def quick_command(heard: str) -> tuple[str, str, dict] | None:
         return "cancel_timer", "Done.", {"which": "all" if m.group("t") == "timers" else ""}
     if _QUICK_STOP_ALARM.match(t):
         return "stop_alarm", "Done.", {}
+    if (to := seek_command(t)) is not None:
+        return "seek_music", "Okay.", {"to": to}
+    for rx in _QUICK_QUIET:
+        if m := rx.match(t):
+            mins = _quiet_minutes(m)
+            return "quiet_mode", f"Okay, quiet for {mins} minutes.", {"minutes": mins}
+    # play_music with an argument we can read without the model
+    if m := re.match(rf"^{_PLEASE}play (?P<q>.+?) (?P<w>next|(?:right )?now)$", t):
+        q = m.group("q")
+        if q not in _GENERIC_Q and not q.endswith(" right") and not re.search(r"\b(game|role|trick|joke|part)\b", q):
+            return "play_music", "Okay, queuing that up.", {"query": q, "when": "next" if m.group("w") == "next" else "now"}
+    for rx in (rf"^{_PLEASE}(?:queue up|queue|play|add) (?P<n>{_N10}) (?:songs|tracks) by (?P<q>.+)$",
+               rf"^{_PLEASE}(?:queue up|queue|play|add) (?P<n>{_N10}) (?P<q>(?!songs|tracks)[a-z0-9' ]+?) (?:songs|tracks)$"):
+        if m := re.match(rx, t):
+            n = _num(m.group("n"))
+            if n and 1 <= n <= 10 and m.group("q") not in _GENERIC_Q:
+                return "play_music", "Okay, queuing that up.", {"query": m.group("q"), "count": n}
     return None
+
+
+# ---------- brain-local answers (no robot tool, no LLM) ----------
+_LOCAL_TIME = re.compile(rf"^{_PLEASE}(?:what'?s the time|what is the time|what time is it|tell me the time|"
+                         rf"do you have the time)(?: now| right now| please)?$")
+_LOCAL_DATE = re.compile(rf"^{_PLEASE}(?:what'?s|what is) (?:the|today'?s) date(?: today)?$|"
+                         rf"^{_PLEASE}what day is (?:it|today)(?: today)?$")
+_LOCAL_REPEAT = re.compile(rf"^{_PLEASE}(?:say that again|say it again|repeat that|repeat it|what did you say|come again|"
+                           rf"say again|pardon|repeat yourself)(?: please)?$")
+_LOCAL_CANCEL = re.compile(r"^(?:never ?mind|cancel|cancel that|forget it|nothing|scratch that|ignore that)$")
+_LOCAL_HELP = re.compile(rf"^{_PLEASE}(?:what can you do|help|help me|what are your features|what do you do|"
+                         rf"what are your capabilities|what can i ask you|what can i say)(?: please)?$")
+
+_HELP_AREAS = [
+    ("music", {"play_music", "music_queue"}),
+    ("moves and emotions", {"robot_emotion", "robot_dance", "robot_pose", "robot_look"}),
+    ("camera", {"look"}),
+    ("weather and web", {"get_weather", "web_search"}),
+    ("timers and alarms", {"set_timer", "set_alarm"}),
+    ("memory", {"remember"}),
+    ("FRC", {"frc_next_match", "frc_team_info", "frc_rankings"}),
+]
+
+
+def help_text(tools: set[str]) -> str:
+    areas = [label for label, names in _HELP_AREAS if names & tools]
+    if not areas:
+        return "I can chat and answer questions. Just ask."
+    joined = areas[0] if len(areas) == 1 else ", ".join(areas[:-1]) + (", and " if len(areas) > 2 else " and ") + areas[-1]
+    return f"I can help with {joined}. Just ask!"
+
+
+def local_answer(heard: str, tools: set[str], last_said: str = "",
+                 now: datetime.datetime | None = None) -> tuple[str, bool] | None:
+    """(text to speak, is_it_a_real_answer) for requests the brain answers itself, else None. The flag is False for
+    "Okay." / repeat / "nothing said yet" replies, which must not replace what "say that again" repeats."""
+    t = _norm(heard)
+    now = now or datetime.datetime.now()
+    if _LOCAL_CANCEL.match(t):
+        return "Okay.", False
+    if _LOCAL_REPEAT.match(t):
+        return (last_said, False) if last_said else ("I haven't said anything yet.", False)
+    if _LOCAL_TIME.match(t):
+        return f"It's {now.hour % 12 or 12}:{now.minute:02d} {'AM' if now.hour < 12 else 'PM'}.", True
+    if _LOCAL_DATE.match(t):
+        return f"It's {now.strftime('%A, %B')} {now.day}.", True
+    if _LOCAL_HELP.match(t):
+        return help_text(tools), True
+    return None
+
+
+# "add X to the queue" / "play X next" / "play 3 songs by X": always a play_music call; the hint names the new args.
+_PLAY_ARGS = re.compile(r"\b(add|put)\b.+\bto (the|my) (queue|playlist)\b|\bqueue up\b|\bplay\s+\S.*\s(next|now)$|"
+                        rf"\b(play|queue|add)\s+(?:{_N10})\s+(?:\w+\s+){{0,2}}(songs|tracks)\b|"
+                        rf"\b(wanted|want|asked for|give me|need)\s+(?:{_N10})\s+(?:\w+\s+){{0,2}}(songs|tracks)\b", re.I)
+_PLAY_NOT = re.compile(r"\b(match|matches|queuing|qualification|team|frc|timer|alarm|calendar|game|role|trick|joke|part)\b", re.I)
+
+
+def play_hint(heard: str) -> str:
+    """Extra words for the forced-call hint naming play_music's optional args, e.g. '; use when="next", count=3'."""
+    t = _norm(heard)
+    parts = []
+    if re.search(r"\b(next|up next)$", t):
+        parts.append('when="next"')
+    elif re.search(r"\bnow$", t):
+        parts.append('when="now"')
+    elif re.search(r"\badd\b.+\bto (the|my) (queue|playlist)\b|\bqueue up\b", t):
+        parts.append('when="last"')
+    m = re.search(rf"\b({_N10})\s+(?:\w+\s+){{0,2}}(?:songs|tracks)\b", t)
+    if m and (n := _num(m.group(1))) and 1 <= n <= 10:
+        parts.append(f"count={n}")
+    return ("; use " + ", ".join(parts)) if parts else ""
 
 
 def _compact(res: Any) -> str:
@@ -203,6 +455,7 @@ class BrainSession:
         self._busy = False
         self._speaking = False
         self._play_end = 0.0                        # when the robot finishes playing what was sent (monotonic)
+        self._last_said = ""                        # Reachy's last real answer (never a filler), for "say that again"
         self._said_recent: list[tuple[float, str]] = []   # (time, text) Reachy spoke, for echo rejection
         self._barge_pending = False
         self._utt_start = 0.0
@@ -389,6 +642,7 @@ class BrainSession:
                 if isinstance(audio, tuple):      # ("say", text)
                     self._state("speaking")
                     self._speak(audio[1])
+                    self._last_said = audio[1]
                     self._remember([{"role": "assistant", "content": audio[1]}])
                 else:
                     self._turn(audio)
@@ -466,6 +720,19 @@ class BrainSession:
         if reason:
             return
         self.send_json({"type": "heard", "text": heard})
+        # Brain-local answers: no robot tool, no LLM, and NOT stored in history. They add nothing the model needs
+        # (time/date/help/repeat/cancel are stateless), and storing them would only lengthen the next prompt;
+        # "say that again" works off self._last_said instead.
+        local = local_answer(heard, {t["function"]["name"] for t in self._tools()}, self._last_said)
+        if local is not None:
+            text, real = local
+            self.send_json({"type": "event", "kind": "tool", "text": "local answer"})
+            self._state("speaking")
+            self._speak(text)
+            if real:
+                self._last_said = text
+            log.info("turn: heard=%r local total=%.1fs", heard, time.time() - t0)
+            return
         quick = quick_command(heard)
         if quick and any(t["function"]["name"] == quick[0] for t in self.robot_tools):
             name, ack, qargs = quick
@@ -474,6 +741,7 @@ class BrainSession:
             say = (say_of(res) or ack) if not _failed(res) else str((res or {}).get("error", "That didn't work."))[:120]
             self._state("speaking")
             self._speak(say)
+            self._last_said = say
             cid = "q" + uuid.uuid4().hex[:8]
             self._remember([{"role": "user", "content": heard},
                             {"role": "assistant", "content": "", "tool_calls": [
@@ -484,11 +752,17 @@ class BrainSession:
             return
         tools = self._tools()
         choice, spoken_all, first_audio = "auto", [], [None]
-        force = forced_tool(heard, {t["function"]["name"] for t in tools})
+        recent = " ".join(str(m.get("content") or "") + json.dumps(m.get("tool_calls") or "")
+                          for t in self.turns[-3:] for m in t)
+        force = forced_tool(heard, {t["function"]["name"] for t in tools}, recent)
         user_msg = {"role": "user", "content": heard}
         if force:
             choice = "required"
-            user_msg = {"role": "user", "content": f"{heard}\n(Call {force} first. Do not answer from memory.)"}
+            hint = play_hint(heard) if force == "play_music" else ""
+            if force == "frc_team_info":
+                hint = ("" if re.search(r"\b(team|frc)\s*\d", heard, re.I) else "; take the team from the conversation") + \
+                       "; set event, year or detail=\"all\" if asked"
+            user_msg = {"role": "user", "content": f"{heard}\n(Call {force} first{hint}. Do not answer from memory.)"}
         msgs = [{"role": "system", "content": self._system()}, *self._pinned(), *self.history, user_msg]
         base = len(msgs) - 1
 
@@ -554,6 +828,8 @@ class BrainSession:
                 final = CANNED_ACK[names[0]]
                 break
         reply = " ".join(spoken_all).strip()
+        if (final or reply) and final != "(done)":
+            self._last_said = final or reply
         turn = msgs[base:]
         turn.append({"role": "assistant", "content": final or reply or "(done)"})
         self._remember(turn)
