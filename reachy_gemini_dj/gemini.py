@@ -337,6 +337,11 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
             parameters=types.Schema(type="OBJECT", properties={}),
         ),
         types.FunctionDeclaration(
+            name="robot_sensors",
+            description="Read Reachy's motion sensor: tilt, whether it's moving or being held, and its internal temperature.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
             name="quiet_mode",
             description="Go quiet: stop listening and rest for a while (default 30 minutes), then wake up on your own.",
             parameters=types.Schema(
@@ -357,6 +362,7 @@ class GeminiSession:
 
     memory = None                 # memory.Memory, set by main.py (long-term facts; see memory.py)
     quiet = None                  # qol.QuietMode, set by main.py
+    imu = None                    # imu.ImuWatcher, set by main.py
     on_turn_done = None           # called (no args) when Gemini finishes a turn; set by main.py
     on_connected = None           # called (no args) each time the Live session connects; set by main.py
 
@@ -679,6 +685,10 @@ class GeminiSession:
             elif name in ("set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm"):
                 timers = getattr(self, "timers", None)
                 return timers.handle(name, args) if timers else {"error": "Timers are not ready yet"}
+
+            elif name == "robot_sensors":
+                imu = getattr(self, "imu", None)
+                return imu.sensors() if imu else {"error": "My motion sensor is not available."}
 
             elif name == "quiet_mode":
                 quiet = getattr(self, "quiet", None)

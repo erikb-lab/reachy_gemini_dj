@@ -129,6 +129,7 @@
     fields.listen_mode = { el: lm, set: function (v) { lm.value = v || 'always'; } };
     c2.appendChild(field('sp-listen_mode', 'Listening', 'Push to talk: Reachy only hears you while you hold the talk button (or Space) on the DJ tab', lm));
     c2.appendChild(switchRow('greet_on_start', 'Say “I’m ready” at start', 'Reachy says it once when it can listen after the app starts (the first warm-up can take a couple of minutes).', false));
+    c2.appendChild(switchRow('imu_reactions', 'React when picked up or bumped', 'Reachy says a short line when it is picked up, set down, bumped, shaken or tipped over (uses its motion sensor).', false));
     root.appendChild(c2);
 
     // --- Backend ---

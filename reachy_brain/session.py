@@ -44,6 +44,17 @@ CANNED_ACK = {
 _MUSIC_INTENT = re.compile(r"\b(play|queue|cue|put on|spin|throw on)\b(?!.*\b(game|role|trick|joke|part)\b)", re.I)
 
 
+# "how hot are you", "are you level", "what does your IMU say": the robot reads its own sensor (robot_sensors).
+# Needs "you/your" so "what's the temperature outside / in Chicago / today" still goes to get_weather.
+_SENSOR_INTENT = re.compile(
+    r"\bhow (hot|warm) are you\b|\bare you (hot|warm|overheating|running hot)\b|"
+    r"\byour (internal |core |body |current )?temp(erature)?\b(?!.{0,25}\b(outside|today|tomorrow|tonight|there|weather)\b)|"
+    r"\bare you (level|tilted|tipped( over)?|leaning|upright|straight|upside down|on your side|lying down)\b|"
+    r"\bare you being (picked up|held|carried|moved|shaken|lifted)\b|\bwhich way is up\b|"
+    r"\b(imu|gyro(scope)?|accelerometer)\b|\bi[ .]m[ .]u\b|\b(motion|your) sensors?\b.{0,15}\b(say|read|reading|show|tell)\b|"
+    r"\b(read|check)\b.{0,12}\b(motion |your |the )?sensors?\b", re.I)
+
+
 # Requests the small model tends to "answer" by making things up instead of calling the tool (seen in the laptop
 # end-to-end test: it described an imaginary room, invented a World Series winner and team facts, and said it was
 # showing an emotion without moving). For these the first round must be a tool call, and a hint names the tool.
@@ -63,7 +74,9 @@ _INTENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\btimers?\b|\bremind me in\b", re.I), "set_timer"),
     (re.compile(r"\b(what (do|can) you see|what are you (looking at|seeing)|look at (this|that|me|it)|in front of you|"
                 r"what('s| is) (this|that) (thing|i'm holding)|read (this|that|it)|can you see)\b", re.I), "look"),
-    (re.compile(r"\b(weather|temperature|forecast|raining|snowing)\b", re.I), "get_weather"),
+    # the robot's own motion sensor / temperature ("your", "are you ..."); outdoor temperature questions stay weather
+    (_SENSOR_INTENT, "robot_sensors"),
+    (re.compile(r"\b(weather|temperature|forecast|raining|snowing|how (hot|cold|warm) is it)\b", re.I), "get_weather"),
     (re.compile(r"\b(next match|queu(e|ing) (status|now)|when do we play)\b", re.I), "frc_next_match"),
     (re.compile(r"\b(team|frc)\s*\d{1,5}\b|\babout (our|my) team\b", re.I), "frc_team_info"),
     (re.compile(r"\b(ranking|rankings|who is (in )?first)\b", re.I), "frc_rankings"),
@@ -190,6 +203,11 @@ _QUICK = [
         rf"favou?rite (?:this|that)(?: song| track| one)?)$")),
     ("favorite_song", "Playing your favorites.", {"action": "play"}, re.compile(
         rf"^{_PLEASE}play (?:my |our )?(?:favou?rites|favou?rite (?:songs|music|tracks))$")),
+    ("robot_sensors", "Let me check.", {}, re.compile(
+        rf"^{_PLEASE}(?:how (?:hot|warm) are you(?: right now| now)?|"
+        rf"(?:what'?s|what is|whats) your (?:internal |current |core )?temperature(?: right now| now)?|"
+        rf"(?:read|check)(?: out)? your (?:imu|sensors?|motion sensor)|"
+        rf"what (?:does|do) your (?:imu|sensors?|motion sensor) (?:say|read|show))(?: please)?$")),
 ]
 
 # "go to sleep" -> quiet_mode: the robot mutes its mic until the talk button / page / timeout wakes it
