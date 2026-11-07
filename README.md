@@ -119,6 +119,17 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
   | Camera | about 60 s |
   | First start (one time) | about 80 s warm-up |
 
+### Privacy and network safety
+- **The Gemini API key never leaves the robot.** For "ask Gemini", the brain asks the robot, and the robot calls
+  Gemini itself. Only the answer goes back to the brain.
+- **The robot only runs tools it offered.** It ignores any other tool a brain asks for.
+- **Private data and the camera need someone to have spoken.** Gmail, Calendar, Tasks, QR scanning and camera
+  images are only given out within 2 minutes of someone speaking to the robot. A brain can't read them silently in
+  the background. Every camera image sent to the brain shows up in the event feed, and so does every blocked request.
+- **Use a network you trust.** The Reachy Mini's own control pages, like this app's settings page, have no
+  password. Anyone on the same Wi-Fi can change the settings. Keep the robot and the brain off guest or public
+  networks.
+
 ---
 
 ## FRC robotics helper (Nexus + The Blue Alliance)

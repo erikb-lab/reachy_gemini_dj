@@ -22,6 +22,13 @@ log = logging.getLogger(__name__)
 
 TURN_TIMEOUT_S = 90.0
 
+# The brain is a separate computer, so the robot does not trust it blindly (anyone on the network could run one and
+# point the robot at it). Tools that read or change the owner's private data, and camera images, are only given out
+# shortly after someone actually spoke to the robot - which is always the case in normal use.
+PRIVATE_TOOLS = {"gmail_check", "calendar_events", "calendar_add", "tasks_list", "tasks_add", "tasks_complete",
+                 "scan_qr"}
+RECENT_SPEECH_S = 120.0
+
 
 class RemoteSession:
     name = "local"
@@ -30,7 +37,8 @@ class RemoteSession:
                  on_voice_chunk: Callable[[bytes], None] | None = None, on_barge_in: Callable[[], None] | None = None,
                  on_heard: Callable[[str], None] | None = None, on_said: Callable[[str], None] | None = None,
                  is_speaking: Callable[[], bool] | None = None, get_frame: Callable[[], Any] | None = None,
-                 tool_specs: Callable[[], list[dict]] | None = None):
+                 tool_specs: Callable[[], list[dict]] | None = None,
+                 seconds_since_user_spoke: Callable[[], float] | None = None):
         self.config = config
         self.execute_tool = execute_tool
         self.on_event = on_event
@@ -41,6 +49,8 @@ class RemoteSession:
         self.is_speaking = is_speaking or (lambda: False)
         self.get_frame = get_frame
         self.tool_specs = tool_specs or robot_tool_specs
+        self.seconds_since_user_spoke = seconds_since_user_spoke or (lambda: 0.0)
+        self._advertised: set[str] = set()
         self.state = "starting"
         self.last_error = ""
         self.connected = False
@@ -117,12 +127,32 @@ class RemoteSession:
 
     def _hello(self) -> dict:
         c = self.config
-        msg = {"type": "hello", "client": "reachy_gemini_dj", "tools": self.tool_specs(),
-               "extra_instructions": c.extra_instructions or "",
-               "allow_gemini_assist": bool(getattr(c, "allow_gemini_assist", True))}
-        if msg["allow_gemini_assist"] and c.api_key:
-            msg["gemini_key"] = c.api_key   # only used by the brain for ask_gemini; stays on your network
-        return msg
+        tools = self.tool_specs()
+        assist = bool(getattr(c, "allow_gemini_assist", True) and c.api_key)
+        self._advertised = {t["name"] for t in tools} | ({"ask_gemini"} if assist else set())
+        # The Gemini key is never sent: with assist_on_robot the brain asks the robot, which calls Gemini itself.
+        return {"type": "hello", "client": "reachy_gemini_dj", "tools": tools,
+                "extra_instructions": c.extra_instructions or "",
+                "allow_gemini_assist": bool(getattr(c, "allow_gemini_assist", True)), "assist_on_robot": assist}
+
+    def _recently_asked(self) -> bool:
+        try:
+            return float(self.seconds_since_user_spoke()) <= RECENT_SPEECH_S
+        except Exception:
+            return False
+
+    def _tool(self, name: str, args: dict) -> Any:
+        """Run one tool for the brain, but only tools this robot offered, and private ones only after real speech."""
+        if name not in self._advertised:
+            log.warning("brain asked for a tool the robot did not offer: %r", name)
+            return {"error": f"Unknown tool {name}."}
+        if name in PRIVATE_TOOLS and not self._recently_asked():
+            self.on_event("security", f"Blocked {name}: nobody spoke to the robot just now")
+            return {"error": "I can only do that right after someone asks me out loud."}
+        if name == "ask_gemini":
+            from .gemini_assist import ask_gemini
+            return ask_gemini(str((args or {}).get("question", "")), self.config.api_key or "")
+        return self.execute_tool(name, args)
 
     async def _main(self) -> None:
         import websockets
@@ -229,7 +259,7 @@ class RemoteSession:
 
     async def _run_tool(self, ws, m: dict) -> None:
         try:
-            res = await asyncio.to_thread(self.execute_tool, m.get("name", ""), m.get("args") or {})
+            res = await asyncio.to_thread(self._tool, str(m.get("name", "")), m.get("args") or {})
         except Exception as e:
             res = {"error": f"{type(e).__name__}: {e}"}
         try:
@@ -239,10 +269,16 @@ class RemoteSession:
 
     async def _send_frame(self, ws, cid: str) -> None:
         jpeg = ""
+        if not self._recently_asked():
+            self.on_event("security", "Blocked a camera request: nobody spoke to the robot just now")
+            await ws.send(json.dumps({"type": "frame", "id": cid, "jpeg_b64": ""}))
+            return
         try:
             if self.get_frame:
                 frame = await asyncio.to_thread(self.get_frame)
                 jpeg = encode_jpeg_b64(frame) if frame is not None else ""
+                if jpeg:
+                    self.on_event("camera", "Sent a camera image to the brain")
         except Exception as e:
             log.info("camera frame unavailable: %s", e)
         await ws.send(json.dumps({"type": "frame", "id": cid, "jpeg_b64": jpeg}))

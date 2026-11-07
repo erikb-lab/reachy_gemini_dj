@@ -284,3 +284,15 @@ def test_history_trims_old_turns_in_one_go():
     assert total <= 1000 and len(s.turns) >= 3
     assert s.turns[-1][0]["content"].startswith("q29")
     s.close()
+
+
+def test_ask_gemini_goes_through_the_robot_when_the_robot_has_the_key():
+    s, llm, sent, _ = make([([], [("ask_gemini", '{"question": "hard"}')]), (["Answer."], [])], heard="ask gemini something",
+                           robot={"ask_gemini": {"answer": "42"}})
+    s.on_hello({"tools": [], "assist_on_robot": True})
+    ready = [m for m in sent if m.get("type") == "ready"][-1]
+    assert "ask_gemini" in ready["tools"] and not s.gemini_key
+    run_turn(s, sent)
+    assert any(m.get("type") == "tool_call" and m["name"] == "ask_gemini" for m in sent)
+    assert "42" in llm.calls[1]["msgs"][-1]["content"]
+    s.close()

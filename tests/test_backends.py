@@ -109,3 +109,42 @@ def test_hw_speaker_level_command(monkeypatch):
     assert audio.set_hw_speaker_level(100) == "speaker level 100%"
     assert calls[0][-3:] == ["sset", "PCM,0", "100%"]
     assert audio.set_hw_speaker_level(0) == "left alone" and len(calls) == 1
+
+
+# ---------- robot <-> brain trust ----------
+def _remote(spoke_ago=5.0, api_key="KEY-NEVER-SENT", events=None):
+    from types import SimpleNamespace
+    from reachy_gemini_dj.remote_session import RemoteSession
+    cfg = SimpleNamespace(api_key=api_key, allow_gemini_assist=True, extra_instructions="", brain_url="ws://x:1")
+    ran = []
+    r = RemoteSession(cfg, execute_tool=lambda n, a: ran.append(n) or {"result": "ok"},
+                      on_event=lambda k, t: (events if events is not None else []).append((k, t)),
+                      tool_specs=lambda: [{"name": "play_music"}, {"name": "gmail_check"}],
+                      seconds_since_user_spoke=lambda: spoke_ago)
+    return r, ran
+
+
+def test_hello_never_contains_the_gemini_key():
+    r, _ = _remote()
+    hello = r._hello()
+    assert "KEY-NEVER-SENT" not in __import__("json").dumps(hello)
+    assert hello["assist_on_robot"] is True
+
+
+def test_robot_only_runs_tools_it_offered():
+    r, ran = _remote()
+    r._hello()
+    assert "error" in r._tool("tasks_complete", {"title": "x"}) and ran == []
+    assert r._tool("play_music", {"query": "x"}) == {"result": "ok"} and ran == ["play_music"]
+
+
+def test_private_tools_need_someone_to_have_spoken():
+    events = []
+    r, ran = _remote(spoke_ago=1e9, events=events)
+    r._hello()
+    assert "out loud" in r._tool("gmail_check", {})["error"] and ran == []
+    assert any(k == "security" for k, _ in events)
+    assert r._tool("play_music", {"query": "x"}) == {"result": "ok"}        # everyday tools are not affected
+    r2, ran2 = _remote(spoke_ago=10.0)
+    r2._hello()
+    assert r2._tool("gmail_check", {}) == {"result": "ok"} and ran2 == ["gmail_check"]
