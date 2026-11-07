@@ -32,7 +32,7 @@
     els.status = h('div', { class: 'mh-status', role: 'status', 'aria-live': 'polite', text: 'Not checked yet.' });
     els.list = h('ul', { class: 'mh-list' });
     els.check = h('button', { type: 'button', class: 'pn-btn', text: 'Check now', onclick: check });
-    els.clear = h('button', { type: 'button', class: 'pn-btn primary', text: 'Clear motor errors', onclick: clear });
+    els.clear = h('button', { type: 'button', class: 'pn-btn secondary', text: 'Clear motor errors', onclick: clear });
     card.appendChild(els.status);
     card.appendChild(els.list);
     card.appendChild(h('div', { class: 'gp-row mh-row' }, [els.check, els.clear]));
@@ -41,10 +41,10 @@
       'would, then holds it where it is. If the error comes straight back, something is blocking it: check it by hand.' }));
     root.appendChild(card);
     var css = document.createElement('style');
-    css.textContent = '.mh-status{display:flex;align-items:center;gap:8px;font-weight:600;margin-bottom:8px}' +
-      '.mh-list{list-style:none;margin:0 0 10px;padding:0}.mh-list li{padding:6px 0;border-top:1px solid var(--p-border)}' +
+    css.textContent = '.mh-status{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin-bottom:12px}' +
+      '.mh-list{list-style:none;margin:0 0 12px;padding:0;font-size:13.5px}.mh-list li{padding:8px 0;border-top:1px solid var(--p-border)}' +
       '.mh-list li:first-child{border-top:0}.mh-list b{display:inline-block;min-width:120px}' +
-      '.mh-row{display:flex;flex-wrap:wrap;gap:8px}#rp-motors .pn-btn{text-transform:none}';
+      '.mh-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}';
     document.head.appendChild(css);
     paint(null);
     return true;

@@ -47,7 +47,7 @@
 
     card.appendChild(h('h3', { text: 'Head direction' }));
     var pad = h('div', { class: 'rp-pad', role: 'group', 'aria-label': 'Head direction' });
-    [['up', '↑', 'Look up'], ['left', '←', 'Look left'], ['front', 'front', 'Look front'],
+    [['up', '↑', 'Look up'], ['left', '←', 'Look left'], ['front', 'Front', 'Look front'],
      ['right', '→', 'Look right'], ['down', '↓', 'Look down']].forEach(function (d) {
       pad.appendChild(h('button', { type: 'button', class: 'pn-btn ' + d[0], 'aria-label': d[2], title: d[2],
         onclick: function () { move('head', d[0]); } }, [d[1]]));
@@ -96,7 +96,7 @@
     els.poseName = h('input', { type: 'text', id: 'rp-pose-name', maxlength: '40', placeholder: 'Pose name, e.g. wave',
       'aria-label': 'Pose name', autocomplete: 'off',
       onkeydown: function (e) { if (e.key === 'Enter') savePose(); } });
-    els.poseSave = h('button', { type: 'button', class: 'pn-btn primary', text: 'Save pose', onclick: savePose });
+    els.poseSave = h('button', { type: 'button', class: 'pn-btn secondary', text: 'Save pose', onclick: savePose });
     card.appendChild(h('h3', { text: 'Save current pose' }));
     card.appendChild(h('div', { class: 'rp-dance' }, [els.poseName, els.poseSave]));
     card.appendChild(h('h3', { text: 'Saved poses' }));
@@ -143,14 +143,14 @@
     names.forEach(function (n) {
       els.poseList.appendChild(h('div', { class: 'rp-pose' }, [
         h('span', { class: 'rp-pose-name', text: n }),
-        h('button', { type: 'button', class: 'pn-btn primary', text: 'Play', 'aria-label': 'Play pose ' + n,
+        h('button', { type: 'button', class: 'pn-btn secondary sm', text: 'Play', 'aria-label': 'Play pose ' + n,
           onclick: function () {
             post('/api/poses/play', { name: n }).then(function (r) {
               if (r && r.ok) { if (learning) { learning = false; renderLearn(); } toast('Reachy: pose ' + r.name); }
               else toast((r && r.error) || 'Could not play pose', true);
             }).catch(function (e) { toast('Could not reach the app (' + e.message + ')', true); });
           } }),
-        h('button', { type: 'button', class: 'pn-btn', text: 'Delete', 'aria-label': 'Delete pose ' + n,
+        h('button', { type: 'button', class: 'pn-btn danger sm', text: 'Delete', 'aria-label': 'Delete pose ' + n,
           onclick: function () {
             if (!window.confirm('Delete the pose "' + n + '"?')) return;
             post('/api/poses/delete', { name: n }).then(function (r) {
