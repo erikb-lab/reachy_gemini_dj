@@ -45,11 +45,19 @@ def _pairs(n: int) -> str:
     return _below_100(a) + " " + ("oh " + _ONES[b] if b < 10 else _below_100(b))
 
 
-def _number(tok: str) -> str:
+def _team(tok: str) -> str:
+    """FRC team numbers: 254 -> two fifty four, 1678 -> sixteen seventy eight, 1005 -> ten oh five."""
     n = int(tok)
-    if len(tok) == 3 and n >= 100 and tok[0] != "0" and n % 100 != 0:      # team 254 -> two fifty four
+    if len(tok) == 3 and tok[0] != "0" and n % 100 != 0:
         return _ONES[int(tok[0])] + " " + (("oh " + _ONES[int(tok[1:])]) if tok[1] == "0" else _below_100(int(tok[1:])))
     if len(tok) == 4 and 1001 <= n <= 9999 and n % 1000 != 0:
+        return _pairs(n)
+    return int_words(n)
+
+
+def _number(tok: str) -> str:
+    n = int(tok)
+    if len(tok) == 4 and 1900 <= n <= 2099 and n % 1000 != 0:        # a year
         return _pairs(n)
     return int_words(n)
 
@@ -70,6 +78,8 @@ def speakable(text: str) -> str:
     t = re.sub(r"(\d+)\s*%", lambda m: m.group(1) + " percent", t)
     t = re.sub(r"\b(\d{1,3}(?:,\d{3})+)\b", lambda m: int_words(int(m.group(1).replace(",", ""))), t)
     t = re.sub(r"(\d+)\.(\d+)", lambda m: int_words(int(m.group(1))) + " point " + " ".join(_ONES[int(d)] for d in m.group(2)), t)
+    t = re.sub(r"(?i)\b(teams?|frc)(\s+)(\d{1,5}(?:(?:,\s*(?:and\s+)?|\s+and\s+)\d{1,5})*)\b",
+               lambda m: m.group(1) + m.group(2) + re.sub(r"\d+", lambda d: _team(d.group(0)), m.group(3)), t)
     t = re.sub(r"\d+", lambda m: _number(m.group(0)), t)
     return t
 

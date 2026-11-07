@@ -20,3 +20,10 @@ def test_plain_numbers_percent_ordinals_times():
     assert speakable("about 3.14") == "about three point one four"
     assert speakable("12,500 people") == "twelve thousand five hundred people"
     assert speakable("no digits here") == "no digits here"
+
+
+def test_team_style_only_after_the_word_team():
+    assert speakable("We scored 128 points") == "We scored one hundred twenty eight points"
+    assert speakable("pit 1234") == "pit one thousand two hundred thirty four"
+    assert speakable("teams 254 and 1678") == "teams two fifty four and sixteen seventy eight"
+    assert speakable("Team 254 beat 118") == "Team two fifty four beat one hundred eighteen"
