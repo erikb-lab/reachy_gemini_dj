@@ -46,13 +46,8 @@ def _pairs(n: int) -> str:
 
 
 def _team(tok: str) -> str:
-    """FRC team numbers: 254 -> two fifty four, 1678 -> sixteen seventy eight, 1005 -> ten oh five."""
-    n = int(tok)
-    if len(tok) == 3 and tok[0] != "0" and n % 100 != 0:
-        return _ONES[int(tok[0])] + " " + (("oh " + _ONES[int(tok[1:])]) if tok[1] == "0" else _below_100(int(tok[1:])))
-    if len(tok) == 4 and 1001 <= n <= 9999 and n % 1000 != 0:
-        return _pairs(n)
-    return int_words(n)
+    """FRC team numbers are read digit by digit: 254 -> two five four, 1005 -> one zero zero five."""
+    return " ".join(_ONES[int(d)] for d in tok)
 
 
 def _number(tok: str) -> str:
