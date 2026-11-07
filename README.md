@@ -26,6 +26,12 @@ questions.
 - **Moves and emotions.** Emotions, dances and head moves come from Pollen's official libraries. **Learn poses**
   lets you turn the motors off, pose Reachy by hand, lock the pose and save it by name. Then say "go to my
   playing-music pose".
+- **Gamepad mode.** Drive the motors directly with a game controller (Xbox, PlayStation, Switch Pro, 8BitDo…).
+  Pair it over Bluetooth with the phone or computer showing the controller page, open the **Robot** tab, press any
+  button, then **Start gamepad mode** (or Start on the controller). Sticks move the head and body, bumpers tilt,
+  triggers lean, the D-pad moves the antennas, A saves the pose, B centres, Y toggles fine control. Moves are
+  speed-capped and limited to a safe range; other moves pause while it is on, and it turns itself off after
+  3 minutes without input.
 - **Camera.** Ask "what do you see?" and the local vision model describes what is in front of Reachy.
 - **Weather and web search.** Both are free (Open-Meteo and DuckDuckGo) and need no keys.
 - **FRC helper.** Scan your team's FRC Nexus QR code, hear queuing alerts, and look up any team's history and

@@ -64,6 +64,70 @@ DIRECTIONS = {
 THINK_TILT_DEG = 9.0      # sideways head roll for the "thinking" tilt
 THINK_TILT_S = 1.4        # slow on purpose
 
+# Gamepad drive ("manual" mode): the controller page streams a target pose; a 50 Hz loop walks the motors towards it
+# at a capped speed, so a dropped packet or a "centre" press can never make the robot jump.
+# Units: x/y/z in mm (x forward, y left, z up), angles in degrees (yaw + = left, pitch + = down, roll + = tilt right).
+DRIVE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw", "body", "ant_l", "ant_r")
+DRIVE_LIMITS = {"x": (-15.0, 15.0), "y": (-15.0, 15.0), "z": (-15.0, 20.0),
+                "roll": (-25.0, 25.0), "pitch": (-30.0, 30.0), "yaw": (-60.0, 60.0),
+                "body": (-150.0, 150.0), "ant_l": (-120.0, 120.0), "ant_r": (-120.0, 120.0)}
+DRIVE_SPEED = {"x": 60.0, "y": 60.0, "z": 60.0, "roll": 120.0, "pitch": 120.0, "yaw": 120.0,
+               "body": 90.0, "ant_l": 300.0, "ant_r": 300.0}   # max change per second
+DRIVE_HZ = 50.0
+DRIVE_IDLE_S = 180.0      # no input for this long: leave manual mode (the robot keeps holding the pose)
+
+
+def head_pose(x_mm: float, y_mm: float, z_mm: float, roll: float, pitch: float, yaw: float):
+    """4x4 head pose, same convention as reachy_mini.utils.create_head_pose (extrinsic xyz Euler, degrees, mm)."""
+    import math
+    import numpy as np
+    r, p, y = math.radians(roll), math.radians(pitch), math.radians(yaw)
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    m = np.eye(4)
+    m[:3, :3] = [[cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+                 [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+                 [-sp, cp * sr, cp * cr]]
+    m[:3, 3] = [x_mm / 1000.0, y_mm / 1000.0, z_mm / 1000.0]
+    return m
+
+
+def matrix_to_rpy(m) -> tuple[float, float, float]:
+    """Inverse of head_pose's rotation: (roll, pitch, yaw) in degrees."""
+    import math
+    pitch = math.asin(max(-1.0, min(1.0, -float(m[2][0]))))
+    roll = math.atan2(float(m[2][1]), float(m[2][2]))
+    yaw = math.atan2(float(m[1][0]), float(m[0][0]))
+    return math.degrees(roll), math.degrees(pitch), math.degrees(yaw)
+
+
+def drive_clamp(target: dict) -> dict:
+    """Keep only known keys with finite numbers, clamped to the safe range."""
+    out = {}
+    for k, v in (target or {}).items():
+        if k not in DRIVE_LIMITS:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f != f or f in (float("inf"), float("-inf")):
+            continue
+        lo, hi = DRIVE_LIMITS[k]
+        out[k] = min(hi, max(lo, f))
+    return out
+
+
+def drive_step(current: dict, wanted: dict, dt: float) -> dict:
+    """Move each value of current towards wanted by at most DRIVE_SPEED * dt."""
+    out = dict(current)
+    for k in DRIVE_KEYS:
+        if k not in wanted:
+            continue
+        step = DRIVE_SPEED[k] * dt
+        d = wanted[k] - out.get(k, 0.0)
+        out[k] = out.get(k, 0.0) + max(-step, min(step, d))
+    return out
+
 
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
@@ -83,10 +147,15 @@ class Motion:
         self.learning = False
         self._thinking = False                 # wanted: head tilted while the brain thinks
         self._tilted = False                   # the head is actually tilted
+        self.manual = False                    # gamepad drive mode: other moves are ignored while it is on
+        self._drive_cmd: dict = {}             # what the motors were last told
+        self._drive_want: dict = {}            # what the page asked for
+        self._drive_seen = 0.0                 # last input from the page (monotonic)
         from .poses import PoseStore
         self.poses = PoseStore()
         threading.Thread(target=self._worker, daemon=True, name="motion").start()
         threading.Thread(target=self._prefetch, daemon=True, name="motion-prefetch").start()
+        threading.Thread(target=self._drive_loop, daemon=True, name="motion-drive").start()
 
     # -------------------------------------------------------------- libraries ---
     def _prefetch(self) -> None:
@@ -124,7 +193,7 @@ class Motion:
 
     def moving(self) -> bool:
         """True while Reachy moves itself or is limp for hand posing (the IMU watcher must ignore the sensor then)."""
-        return bool(self.busy or self.learning or not self._q.empty())
+        return bool(self.busy or self.learning or self.manual or not self._q.empty())
 
     def status(self) -> dict:
         return {
@@ -135,6 +204,7 @@ class Motion:
             "dances_ready": DANCES_REPO in self._libs,
             "error": self.error or "; ".join(v for k, v in self._lib_err.items() if not k.endswith("_t")),
             "learning": self.learning,
+            "manual": self.manual,
             "poses": self.poses.names(),
         }
 
@@ -158,6 +228,9 @@ class Motion:
     def _submit(self, label: str, fn) -> None:
         if self.learning:
             log.info("Learn mode is on (motors relaxed); ignoring move: %s", label)
+            return
+        if self.manual:
+            log.info("Gamepad mode is on; ignoring move: %s", label)
             return
         if not self._enabled():
             log.debug("Movement is turned off in the settings; ignoring move: %s", label)
@@ -255,7 +328,7 @@ class Motion:
         if on:
             if self._thinking:
                 return
-            if self.learning or not self._enabled() or self.busy or not self._q.empty():
+            if self.learning or self.manual or not self._enabled() or self.busy or not self._q.empty():
                 return
             self._thinking = True
 
@@ -293,6 +366,8 @@ class Motion:
         """Turn the motors off so the robot can be posed freely by hand (the head will not hold itself up)."""
         if self.learning:
             return "already in learn mode"
+        if self.manual:
+            self.drive_stop()
         while self.busy:                       # let a running move finish before going limp
             time.sleep(0.05)
         self.mini.disable_motors()
@@ -351,6 +426,8 @@ class Motion:
         real, p = found
         if self.learning:
             self.learn_stop()
+        if self.manual:
+            self.drive_stop()
 
         def run():
             import numpy as np
@@ -360,3 +437,100 @@ class Motion:
 
         self._submit(f"pose {real}", run)
         return real
+
+    # ------------------------------------------------------------- gamepad drive ---
+    def _read_drive_pose(self) -> dict:
+        """The robot's present pose in drive units (falls back to neutral if it cannot be read)."""
+        pose = {k: 0.0 for k in DRIVE_KEYS}
+        try:
+            import math
+            m = self.mini.get_current_head_pose()
+            roll, pitch, yaw = matrix_to_rpy(m)
+            head_joints, antennas = self.mini.get_current_joint_positions()
+            pose.update(x=float(m[0][3]) * 1000, y=float(m[1][3]) * 1000, z=float(m[2][3]) * 1000,
+                        roll=float(roll), pitch=float(pitch), yaw=float(yaw))
+            if head_joints:
+                pose["body"] = math.degrees(float(head_joints[0]))
+            if antennas and len(antennas) == 2:
+                pose["ant_r"], pose["ant_l"] = math.degrees(float(antennas[0])), math.degrees(float(antennas[1]))
+        except Exception as e:
+            log.warning("could not read the pose for gamepad mode: %s", e)
+        return drive_clamp(pose)
+
+    def drive_start(self) -> dict:
+        """Gamepad mode on: motors on, other moves paused, start from where the robot is now."""
+        if self.manual:
+            return self.drive_state()
+        if self.learning:
+            self.learn_stop()
+        try:                                   # drop a queued move and let a running one finish
+            self._q.get_nowait()
+        except queue.Empty:
+            pass
+        deadline = time.monotonic() + 8.0
+        while self.busy and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self._ensure_motors()
+        pose = self._read_drive_pose()
+        with self._lock:
+            self._drive_cmd = dict(pose)
+            self._drive_want = dict(pose)
+            self._drive_seen = time.monotonic()
+            self._thinking = self._tilted = False
+            self.manual = True
+        self.last = "gamepad mode"
+        log.info("gamepad mode on")
+        return self.drive_state()
+
+    def drive_stop(self) -> dict:
+        """Gamepad mode off. The robot keeps holding the last pose; normal moves resume."""
+        if self.manual:
+            log.info("gamepad mode off")
+        self.manual = False
+        self.last = "pose held"
+        return self.drive_state()
+
+    def drive_set(self, target: dict) -> dict:
+        if not self.manual:
+            raise RuntimeError("Gamepad mode is off.")
+        clean = drive_clamp(target)
+        with self._lock:
+            self._drive_want.update(clean)
+            self._drive_seen = time.monotonic()
+        return self.drive_state()
+
+    def drive_state(self) -> dict:
+        with self._lock:
+            return {"manual": self.manual, "target": dict(self._drive_want),
+                    "limits": {k: list(v) for k, v in DRIVE_LIMITS.items()}}
+
+    def _drive_send(self, cmd: dict) -> None:
+        import math
+        head = head_pose(cmd["x"], cmd["y"], cmd["z"], cmd["roll"], cmd["pitch"], cmd["yaw"])
+        self.mini.set_target(head=head, antennas=[math.radians(cmd["ant_r"]), math.radians(cmd["ant_l"])],
+                             body_yaw=math.radians(cmd["body"]))
+
+    def _drive_loop(self) -> None:
+        dt = 1.0 / DRIVE_HZ
+        last_err = 0.0
+        while not self._stop.is_set():
+            if not self.manual:
+                time.sleep(0.1)
+                continue
+            if time.monotonic() - self._drive_seen > DRIVE_IDLE_S:
+                log.info("gamepad mode: no input for %.0f s, leaving it", DRIVE_IDLE_S)
+                self.drive_stop()
+                continue
+            with self._lock:
+                nxt = drive_step(self._drive_cmd, self._drive_want, dt)
+                changed = nxt != self._drive_cmd
+                self._drive_cmd = nxt
+            if changed:
+                try:
+                    self._drive_send(nxt)
+                except Exception as e:
+                    if time.monotonic() - last_err > 5:
+                        log.warning("gamepad drive: %s", e)
+                        self.error = f"{type(e).__name__}: {e}"[:160]
+                        last_err = time.monotonic()
+            time.sleep(dt)

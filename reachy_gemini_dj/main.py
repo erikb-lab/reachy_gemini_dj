@@ -131,6 +131,23 @@ class LearnToggle(BaseModel):
     on: bool
 
 
+class DriveToggle(BaseModel):
+    on: bool
+
+
+class DriveTarget(BaseModel):
+    """Gamepad drive target: mm for x/y/z, degrees for the rest; missing values are left as they are."""
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    roll: float | None = None
+    pitch: float | None = None
+    yaw: float | None = None
+    body: float | None = None
+    ant_l: float | None = None
+    ant_r: float | None = None
+
+
 class GoogleClientUpdate(BaseModel):
     client_id: str
     client_secret: str
@@ -567,6 +584,30 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 return {"ok": True, "learning": self.motion.learning, "result": res}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
+
+        # Gamepad mode: the page reads a controller (Gamepad API) and streams a target pose; motion.py moves the
+        # motors there at a capped speed and pauses every other move while it is on.
+        @app.post("/api/drive")
+        def drive_toggle(req: DriveToggle):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            if req.on and not self.config.motion_enabled:
+                return {"ok": False, "error": "Robot movement is turned off in Settings."}
+            try:
+                res = self.motion.drive_start() if req.on else self.motion.drive_stop()
+                self.record_event("pose", "Gamepad mode on" if req.on else "Gamepad mode off")
+                return {"ok": True, **res}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        @app.post("/api/drive/target")
+        def drive_target(req: DriveTarget):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                return {"ok": True, **self.motion.drive_set(req.model_dump(exclude_none=True))}
+            except Exception as e:
+                return {"ok": False, "manual": False, "error": str(e)}
 
         @app.post("/api/poses/save")
         def save_pose(req: PoseName):
