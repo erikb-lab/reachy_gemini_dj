@@ -49,6 +49,18 @@ _MUSIC_INTENT = re.compile(r"\b(play|queue|put on|spin|throw on)\b(?!.*\b(game|r
 # showing an emotion without moving). For these the first round must be a tool call, and a hint names the tool.
 # (The tool list itself is never changed between rounds: that would throw away llama-server's prompt cache.)
 _INTENTS: list[tuple[re.Pattern, str]] = [
+    # timers and memory first, so "remember ..." / "timer ..." never fall through to web_search
+    (re.compile(r"\b(what (do|did) you remember|what have i (asked|told) you to remember|list (my |your )?memor)", re.I),
+     "list_memories"),
+    (re.compile(r"\bforget (that|about)\b", re.I), "forget"),
+    (re.compile(r"\b(remember (that|this|my|our|the|to)\b|don'?t forget|do not forget|please remember)", re.I),
+     "remember"),
+    (re.compile(r"\bcancel\b.{0,20}\b(timer|alarm)s?\b|\b(delete|clear)\b.{0,20}\btimers?\b", re.I), "cancel_timer"),
+    (re.compile(r"\b(stop|turn off|silence|dismiss|shut off)\b.{0,15}\balarm\b", re.I), "stop_alarm"),
+    (re.compile(r"\bhow (long|much time)\b.{0,15}\b(left|remaining|on)\b|\bmy timers\b|\b(any|what|which) timers\b", re.I),
+     "list_timers"),
+    (re.compile(r"\balarm\b|\bwake me\b", re.I), "set_alarm"),
+    (re.compile(r"\btimers?\b|\bremind me in\b", re.I), "set_timer"),
     (re.compile(r"\b(what (do|can) you see|what are you (looking at|seeing)|look at (this|that|me|it)|in front of you|"
                 r"what('s| is) (this|that) (thing|i'm holding)|read (this|that|it)|can you see)\b", re.I), "look"),
     (re.compile(r"\b(weather|temperature|forecast|raining|snowing)\b", re.I), "get_weather"),
@@ -61,6 +73,14 @@ _INTENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\b(who won|latest|news|search|look up|this year|this season|current(ly)?|today'?s)\b", re.I),
      "web_search"),
 ]
+
+
+# Spoken instantly (before the LLM round) when a slow tool is forced.
+FILLERS = {
+    "get_weather": "Let me check the weather.", "web_search": "Let me look that up.", "look": "Let me take a look.",
+    "frc_next_match": "Checking the schedule.", "frc_team_info": "Looking up that team.",
+    "frc_rankings": "Checking the rankings.",
+}
 
 
 def forced_tool(heard: str, available: set[str]) -> str | None:
@@ -88,14 +108,41 @@ _QUICK = [
 ]
 
 
-def quick_command(heard: str) -> tuple[str, str] | None:
-    """('tool_name', spoken ack) when the whole utterance is a bare music transport command, else None."""
-    t = re.sub(r"[^a-z' ]", " ", heard.lower())
-    t = " ".join(t.split())
+_PLEASE = r"(?:please |can you |could you |hey reachy )*"
+_NUM = (r"\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+        r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|forty five|fifty|sixty|ninety")
+_UNIT = r"(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)"
+_DUR = (rf"(?:half an hour|(?:{_NUM})(?: and a half)? {_UNIT}(?: and (?:{_NUM}) {_UNIT})?|"
+        rf"an hour and a half)")
+_QUICK_TIMER = [re.compile(rf"^{_PLEASE}(?:set|start|make|create)(?: me)?(?: a| an| the)? timer (?:for|of) (?P<dur>{_DUR})$"),
+                re.compile(rf"^{_PLEASE}(?:set|start|make|create)(?: me)?(?: a| an| the)? (?P<dur>{_DUR}) timer$"),
+                re.compile(rf"^{_PLEASE}(?P<dur>{_DUR}) timer$")]
+_QUICK_CANCEL = re.compile(rf"^{_PLEASE}(?:cancel|delete|clear)(?: the| my| all| all of my| all my)? (?P<t>timers?)$")
+_QUICK_STOP_ALARM = re.compile(rf"^{_PLEASE}(?:stop|turn off|silence|dismiss|shut off)(?: the| my)? alarm$")
+
+
+def quick_command(heard: str) -> tuple[str, str, dict] | None:
+    """('tool_name', spoken ack, args) when the whole utterance is a bare music transport / timer command, else None."""
+    t = re.sub(r"[^a-z0-9.' ]", " ", heard.lower())
+    t = " ".join(t.split()).rstrip(". ")
     for name, ack, rx in _QUICK:
         if rx.match(t):
-            return name, ack
+            return name, ack, {}
+    for rx in _QUICK_TIMER:
+        if m := rx.match(t):
+            return "set_timer", "Done.", {"duration": m.group("dur")}
+    if m := _QUICK_CANCEL.match(t):
+        return "cancel_timer", "Done.", {"which": "all" if m.group("t") == "timers" else ""}
+    if _QUICK_STOP_ALARM.match(t):
+        return "stop_alarm", "Done.", {}
     return None
+
+
+def say_of(res: Any) -> str:
+    """The ready-to-speak answer in a tool result ({"say": "..."} with no error), else ''."""
+    if isinstance(res, dict) and "error" not in res and isinstance(res.get("say"), str):
+        return res["say"].strip()
+    return ""
 
 
 def _failed(res: Any) -> bool:
@@ -110,6 +157,7 @@ class BrainSession:
         self.robot_tools: list[dict] = []          # OpenAI-format schemas sent by the robot
         self.robot_kinds: dict[str, str] = {}      # name -> "info" | "action"
         self.extra_instructions = ""
+        self.memory: list[str] = []                 # facts the robot was asked to remember (set at hello only)
         self.gemini_key = cfg.gemini_api_key
         self.allow_assist = True
         self.robot_assist = False                   # the robot calls Gemini itself (its key never comes here)
@@ -132,6 +180,7 @@ class BrainSession:
             "parameters": t.get("parameters") or {"type": "object", "properties": {}}}} for t in tools]
         self.robot_kinds = {t["name"]: t.get("kind", "action") for t in tools}
         self.extra_instructions = msg.get("extra_instructions") or ""
+        self.memory = [str(f).strip() for f in (msg.get("memory") or []) if str(f).strip()]
         self.allow_assist = bool(msg.get("allow_gemini_assist", True))
         self.robot_assist = bool(msg.get("assist_on_robot"))
         if msg.get("gemini_key") and not self.cfg.gemini_api_key:
@@ -217,11 +266,18 @@ class BrainSession:
         today = datetime.date.today().strftime("%A %Y-%m-%d")
         s = f"{self.cfg.persona} Today is {today}."
         if self._assist_on():
-            s += " For hard questions (math, code, multi-step reasoning, long explanations) call ask_gemini, then " \
-                 "say its answer. If the user says 'ask Gemini', always use it."
+            s += " For hard questions or when asked to ask Gemini, use ask_gemini and say its answer."
         if self.extra_instructions:
             s += "\n\nUser context:\n" + self.extra_instructions
         return s
+
+    def _pinned(self) -> list[dict]:
+        """Remembered facts as a fixed pair right after the system message (never in the system text itself, which
+        would invalidate the cached tools prefix; never trimmed)."""
+        if not self.memory:
+            return []
+        return [{"role": "user", "content": "Things you were asked to remember: " + "; ".join(self.memory)},
+                {"role": "assistant", "content": "Noted."}]
 
     def _robot_call(self, name: str, args: dict, timeout: float) -> Any:
         cid = uuid.uuid4().hex[:12]
@@ -300,19 +356,34 @@ class BrainSession:
         """Process the system prompt and tool schemas once so the first real question is fast (otherwise the
         first turn re-reads ~2k prompt tokens on a CPU, which took ~170 s in testing).
         llama-server keeps its prompt cache across connections, so a reconnect with the same prompt skips this."""
-        key = hashlib.sha1(json.dumps([self._system(), self._tools()], sort_keys=True).encode()).hexdigest()
+        key = hashlib.sha1(json.dumps([self._system(), self._tools(), self._pinned()], sort_keys=True).encode()).hexdigest()
         if getattr(self.llm, "warm_key", None) == key:
             log.info("LLM already warm for this prompt; skipping warm-up")
             return
         self._state("loading", "warming up the language model")
         t0 = time.time()
+        fname = f"warm-{key[:16]}.bin"
         try:
-            msgs = [{"role": "system", "content": self._system()}, {"role": "user", "content": "hi"}]
+            if hasattr(self.llm, "slot_restore") and self.llm.slot_restore(fname):
+                self.llm.warm_key = key
+                log.info("LLM prompt cache restored from disk in %.1fs", time.time() - t0)
+                self._state("listening")
+                return
+        except Exception as e:
+            log.info("prompt cache restore failed: %s", e)
+        try:
+            msgs = [{"role": "system", "content": self._system()}, *self._pinned(), {"role": "user", "content": "hi"}]
             self.llm.chat_stream(msgs, self._tools(), lambda c: None, threading.Event(), max_tokens=1)
             self.llm.warm_key = key
             log.info("LLM warm-up took %.1fs", time.time() - t0)
         except Exception as e:
             log.warning("LLM warm-up failed: %s", e)
+        else:
+            try:
+                if hasattr(self.llm, "slot_save"):
+                    self.llm.slot_save(fname)
+            except Exception as e:
+                log.info("prompt cache save failed: %s", e)
         self._state("listening")
 
     def _turn(self, audio: np.ndarray) -> None:
@@ -324,16 +395,16 @@ class BrainSession:
         self.send_json({"type": "heard", "text": heard})
         quick = quick_command(heard)
         if quick and any(t["function"]["name"] == quick[0] for t in self.robot_tools):
-            name, ack = quick
+            name, ack, qargs = quick
             self.send_json({"type": "event", "kind": "tool", "text": f"{name} (voice shortcut)"})
-            res = self._robot_call(name, {}, self.cfg.tool_timeout_s)
-            say = ack if not _failed(res) else str((res or {}).get("error", "That didn't work."))[:120]
+            res = self._robot_call(name, qargs, self.cfg.tool_timeout_s)
+            say = (say_of(res) or ack) if not _failed(res) else str((res or {}).get("error", "That didn't work."))[:120]
             self._state("speaking")
             self._speak(say)
             cid = "q" + uuid.uuid4().hex[:8]
             self._remember([{"role": "user", "content": heard},
                             {"role": "assistant", "content": "", "tool_calls": [
-                                {"id": cid, "type": "function", "function": {"name": name, "arguments": "{}"}}]},
+                                {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(qargs)}}]},
                             {"role": "tool", "tool_call_id": cid, "content": json.dumps(res)},
                             {"role": "assistant", "content": say}])
             log.info("turn: heard=%r shortcut=%s total=%.1fs", heard, name, time.time() - t0)
@@ -345,7 +416,7 @@ class BrainSession:
         if force:
             choice = "required"
             user_msg = {"role": "user", "content": f"{heard}\n(Call {force} first. Do not answer from memory.)"}
-        msgs = [{"role": "system", "content": self._system()}, *self.history, user_msg]
+        msgs = [{"role": "system", "content": self._system()}, *self._pinned(), *self.history, user_msg]
         base = len(msgs) - 1
 
         def on_clause(text: str) -> None:
@@ -355,6 +426,12 @@ class BrainSession:
             spoken_all.append(text)
             self._speak(text)
 
+        if force in FILLERS:
+            # instant filler while the slow tool runs; not in history (history must equal what the LLM was sent).
+            # _speaking goes back to False so a cough while the model thinks does not cancel the turn.
+            self._state("speaking")
+            self._speak(FILLERS[force])
+            self._speaking = False
         final = ""
         for _ in range(3):
             if self._cancel.is_set():
@@ -364,7 +441,7 @@ class BrainSession:
                 final = content
                 break
             msgs.append({"role": "assistant", "content": content, "tool_calls": calls})
-            names, any_failed = [], False
+            names, any_failed, says = [], False, []
             for c in calls:
                 name = c["function"]["name"]
                 names.append(name)
@@ -383,7 +460,13 @@ class BrainSession:
                 else:
                     res = self._robot_call(name, args, self.cfg.tool_timeout_s)
                 any_failed = any_failed or _failed(res)
+                says.append(say_of(res))             # before truncation: the spoken answer must stay whole
                 msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res)[:self.cfg.tool_result_chars]})
+            if all(says):
+                text = " ".join(says)            # every tool gave a ready answer: speak it, no more LLM rounds
+                on_clause(text)
+                final = text
+                break
             if choice == "required":
                 choice = "auto"                  # forced only for the first round
             if any(n in INFO_SERVER_TOOLS or self.robot_kinds.get(n) == "info" for n in names):

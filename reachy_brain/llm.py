@@ -4,6 +4,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -58,6 +59,9 @@ class LlamaServer:
             cmd = [c.llama_server_bin, "-m", c.model_path, "--alias", "brain", "--host", "127.0.0.1",
                    "--port", str(c.llm_port), "-t", str(c.llm_threads), "-c", str(c.llm_ctx * 2), "-np", "2",
                    "--no-kv-unified", "--cache-reuse", "256", "--reasoning", "off", "--no-webui"]
+            if c.slot_cache_dir:
+                os.makedirs(self.slot_dir(), exist_ok=True)
+                cmd += ["--slot-save-path", self.slot_dir()]
             # slot 0 = the conversation, slot 1 = one-off camera questions. Separate KV per slot (--no-kv-unified)
             # is required: with a unified pool the camera request wiped slot 0 (measured: next turn 69 s vs 1.4 s). The
             # conversation's cached prompt; --cache-reuse keeps the cache usable when old turns are trimmed
@@ -79,6 +83,43 @@ class LlamaServer:
                 pass
             time.sleep(1.5)
         raise RuntimeError("llama-server did not become ready")
+
+    def slot_dir(self) -> str:
+        return os.path.expanduser(self.cfg.slot_cache_dir or "")
+
+    def slot_restore(self, filename: str) -> bool:
+        """Load a saved prompt cache into slot 0. False on any failure (missing file, no --slot-save-path...)."""
+        return self._slot_action("restore", filename)
+
+    def slot_save(self, filename: str) -> bool:
+        """Save slot 0's prompt cache under filename (relative to the server's --slot-save-path)."""
+        ok = self._slot_action("save", filename)
+        if ok:
+            self._prune_slots()
+        return ok
+
+    def _slot_action(self, action: str, filename: str) -> bool:
+        try:
+            r = httpx.post(f"{self.base}/slots/0", params={"action": action}, json={"filename": filename}, timeout=120)
+            if r.status_code == 200:
+                return True
+            log.info("slot %s %s: HTTP %s", action, filename, r.status_code)
+        except Exception as e:
+            log.info("slot %s %s failed: %s", action, filename, e)
+        return False
+
+    def _prune_slots(self, keep: int = 3) -> None:
+        """Keep the newest few warm-*.bin files (only when the slot dir is local, i.e. we launched the server)."""
+        if not self.proc:
+            return
+        try:
+            d = self.slot_dir()
+            files = sorted((os.path.join(d, f) for f in os.listdir(d) if f.startswith("warm-") and f.endswith(".bin")),
+                           key=os.path.getmtime, reverse=True)
+            for f in files[keep:]:
+                os.remove(f)
+        except OSError as e:
+            log.info("could not prune slot cache: %s", e)
 
     def healthy(self) -> bool:
         try:

@@ -296,3 +296,259 @@ def test_ask_gemini_goes_through_the_robot_when_the_robot_has_the_key():
     assert any(m.get("type") == "tool_call" and m["name"] == "ask_gemini" for m in sent)
     assert "42" in llm.calls[1]["msgs"][-1]["content"]
     s.close()
+
+
+# ---------- say protocol, fillers, memory, slot cache, timers ----------
+def add_tools(s, *specs):
+    s.on_hello({"tools": [{"name": n, "description": "x", "kind": k} for n, k in specs]})
+
+
+def said(sent):
+    return [m["text"] for m in sent if m.get("type") == "said"]
+
+
+def test_say_result_is_spoken_with_no_second_llm_round():
+    s, llm, sent, _ = make([([], [("frc_next_match", "{}")])], heard="when is our next match",
+                           robot={"frc_next_match": {"say": "Qualification 12 in ten minutes."}})
+    add_tools(s, ("frc_next_match", "info"))
+    run_turn(s, sent)
+    assert len(llm.calls) == 1
+    assert said(sent) == ["Checking the schedule.", "Qualification 12 in ten minutes."]
+    t = s.turns[-1]
+    assert [m["role"] for m in t] == ["user", "assistant", "tool", "assistant"]
+    assert t[-1]["content"] == "Qualification 12 in ten minutes."
+    assert "Checking" not in str(t)                                      # filler never enters history
+    s.close()
+
+
+def test_say_extracted_before_truncation_and_joined():
+    long = "word " * 600
+    s, llm, sent, _ = make([([], [("set_timer", "{}"), ("remember", "{}")])], heard="hello there",
+                           robot={"set_timer": {"say": long.strip(), "pad": "x" * 100}, "remember": {"say": "Got it."}})
+    add_tools(s, ("set_timer", "action"), ("remember", "action"))
+    run_turn(s, sent)
+    assert len(llm.calls) == 1
+    assert said(sent) == [long.strip() + " Got it."]
+    s.close()
+
+
+def test_say_ignored_on_error_and_canned_fallback_kept():
+    s, llm, sent, _ = make([([], [("set_timer", "{}")]), (["Sorry."], [])], heard="hello there",
+                           robot={"set_timer": {"error": "bad", "say": "ignored"}})
+    add_tools(s, ("set_timer", "action"))
+    run_turn(s, sent)
+    assert len(llm.calls) == 2 and said(sent) == ["Sorry."]
+    s.close()
+    s, llm, sent, _ = make([([], [("play_music", "{}")])], heard="hello there")
+    run_turn(s, sent)
+    assert said(sent) == ["Okay, queuing that up."]
+    s.close()
+
+
+def test_weather_say_from_server_tool(monkeypatch):
+    import reachy_brain.assist as assist
+    monkeypatch.setattr(assist, "get_weather", lambda **kw: {"say": "It's 70 degrees in Chicago."})
+    s, llm, sent, _ = make([([], [("get_weather", '{"location": "Chicago"}')])], heard="what's the weather in Chicago")
+    run_turn(s, sent)
+    assert len(llm.calls) == 1
+    assert said(sent) == ["Let me check the weather.", "It's 70 degrees in Chicago."]
+    s.close()
+
+
+def test_weather_template():
+    from reachy_brain.weather import _say
+    c = {"temperature_2m": 71.6, "weather_code": 2}
+    d = {"temperature_2m_max": [80.2, -3.0], "temperature_2m_min": [60.0, -9.0],
+         "precipitation_probability_max": [40, 0], "weather_code": [2, 71]}
+    out = _say("Chicago", c, d, "fahrenheit")
+    assert "72 degrees and partly cloudy" in out and "40 percent chance of rain" in out
+    assert "Tomorrow looks light snow with a high of minus 3" in out
+    assert not any(ch in out for ch in "°%")
+
+
+def test_web_search_trimmed(monkeypatch):
+    import sys
+    import types
+    import reachy_brain.web_search as ws
+
+    class D:
+        def __init__(self, **kw):
+            pass
+
+        def text(self, q, max_results, timelimit):
+            return [{"title": "T" * 200, "body": "B" * 400, "href": "u"}] * 10
+    monkeypatch.setitem(sys.modules, "ddgs", types.SimpleNamespace(DDGS=D))
+    ws._cache.clear()
+    ws._last_call = -100.0
+    out = ws.web_search("anything", max_results=6)
+    assert len(out["results"]) == 3
+    assert sum(len(r["title"]) + len(r["snippet"]) for r in out["results"]) <= 520
+
+
+def test_filler_resets_speaking_flag_and_is_skipped_for_quick():
+    s, llm, sent, _ = make([(["It is sunny."], [])], heard="what's the weather")
+    seen = {}
+    orig = llm.chat_stream
+
+    def spy(*a, **k):
+        seen["speaking"] = s._speaking
+        return orig(*a, **k)
+    llm.chat_stream = spy
+    s.on_hello({"tools": [], "gemini_key": ""})
+    run_turn(s, sent)
+    assert said(sent)[0] == "Let me check the weather." and seen["speaking"] is False
+    assert "Let me check" not in str(llm.calls[0]["msgs"][:-1])
+    s.close()
+    s, llm, sent, _ = make([], heard="pause the music")
+    add_tools(s, ("pause_music", "action"))
+    run_turn(s, sent)
+    assert said(sent) == ["Paused."]
+    s.close()
+
+
+def test_memory_is_pinned_after_system_and_in_every_turn():
+    s, llm, sent, _ = make([(["Hi."], []), (["Again."], [])], heard="hello")
+    s.on_hello({"tools": s_tools(s), "memory": ["our pit is A3", "driver is Sam"]})
+    assert s.memory == ["our pit is A3", "driver is Sam"]
+    run_turn(s, sent)
+    sent.clear()
+    run_turn(s, sent)
+    for c in llm.calls:
+        m = c["msgs"]
+        assert m[0]["role"] == "system" and "A3" not in m[0]["content"]
+        assert m[1] == {"role": "user", "content": "Things you were asked to remember: our pit is A3; driver is Sam"}
+        assert m[2] == {"role": "assistant", "content": "Noted."}
+    assert [m["role"] for m in llm.calls[1]["msgs"]] == ["system", "user", "assistant", "user", "assistant", "user"]
+    s.close()
+
+
+def test_no_memory_means_no_pinned_pair_and_memory_changes_warm_key():
+    s, llm, sent, _ = make([], heard="hello")
+    assert s._pinned() == []
+    time.sleep(0.3)
+    k1 = llm.warm_key
+    s.on_hello({"tools": s_tools(s), "memory": ["a"]})
+    time.sleep(0.3)
+    assert llm.warm_key != k1 and llm.warmups == 2
+    s.close()
+
+
+def test_warm_restores_from_slot_cache_else_warms_and_saves():
+    class SlotLLM(FakeLLM):
+        def __init__(self, restore_ok):
+            super().__init__([])
+            self.restore_ok, self.restored, self.saved = restore_ok, [], []
+
+        def slot_restore(self, f):
+            self.restored.append(f)
+            return self.restore_ok
+
+        def slot_save(self, f):
+            self.saved.append(f)
+            return True
+    for ok in (True, False):
+        llm = SlotLLM(ok)
+        s = BrainSession(BrainConfig(), llm, FakeSTT("x"), FakeTTS(), lambda m: None, lambda b: None)
+        s.on_hello({"tools": []})
+        time.sleep(0.3)
+        assert llm.restored and llm.restored[0].startswith("warm-") and llm.restored[0].endswith(".bin")
+        assert getattr(llm, "warmups", 0) == (0 if ok else 1)
+        assert llm.saved == ([] if ok else llm.restored)
+        assert llm.warm_key
+        s.close()
+
+
+def test_warm_survives_slot_errors():
+    class Bad(FakeLLM):
+        def slot_restore(self, f):
+            raise RuntimeError("boom")
+
+        def slot_save(self, f):
+            raise RuntimeError("boom")
+    llm = Bad([])
+    s = BrainSession(BrainConfig(), llm, FakeSTT("x"), FakeTTS(), lambda m: None, lambda b: None)
+    s.on_hello({"tools": []})
+    time.sleep(0.3)
+    assert llm.warmups == 1 and llm.warm_key
+    s.close()
+
+
+def test_llama_server_slot_calls_and_pruning(tmp_path, monkeypatch):
+    import os
+    import reachy_brain.llm as L
+    cfg = BrainConfig(slot_cache_dir=str(tmp_path), llama_url="http://x")
+    srv = L.LlamaServer(cfg)
+    calls = []
+
+    class R:
+        status_code = 200
+    monkeypatch.setattr(L.httpx, "post", lambda url, **kw: calls.append((url, kw)) or R())
+    assert srv.slot_save("warm-a.bin") and srv.slot_restore("warm-a.bin")
+    assert calls[0][0].endswith("/slots/0") and calls[0][1]["params"] == {"action": "save"}
+    assert calls[1][1]["params"] == {"action": "restore"} and calls[1][1]["json"] == {"filename": "warm-a.bin"}
+
+    def boom(*a, **k):
+        raise L.httpx.ConnectError("no")
+    monkeypatch.setattr(L.httpx, "post", boom)
+    assert srv.slot_restore("x") is False
+    srv.proc = object()                          # pretend we launched it: the local dir gets pruned
+    for i in range(5):
+        p = tmp_path / f"warm-{i}.bin"
+        p.write_text("x")
+        os.utime(p, (1000 + i, 1000 + i))
+    srv._prune_slots()
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["warm-2.bin", "warm-3.bin", "warm-4.bin"]
+
+
+def test_slot_cache_dir_flag():
+    assert BrainConfig.from_args(["--slot-cache-dir", "/x/y"]).slot_cache_dir == "/x/y"
+    assert "/tmp" not in BrainConfig().slot_cache_dir
+
+
+def test_new_intents():
+    from reachy_brain.session import forced_tool
+    allt = {"set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm", "remember", "forget", "list_memories",
+            "web_search", "get_weather", "play_music"}
+
+    def f(t):
+        return forced_tool(t, allt)
+    assert f("Set a timer for the pasta") == "set_timer"
+    assert f("remind me in 5 minutes") == "set_timer"
+    assert f("set an alarm for 7 am") == "set_alarm" and f("wake me at six") == "set_alarm"
+    assert f("remember that our pit is A3") == "remember"
+    assert f("don't forget the battery swap") == "remember"
+    assert f("forget about the pit") == "forget"
+    assert f("what do you remember") == "list_memories"
+    assert f("how long is left on my timer") == "list_timers" and f("show my timers") == "list_timers"
+    assert f("cancel the timer") == "cancel_timer" and f("cancel my alarm") == "cancel_timer"
+    assert f("stop the alarm") == "stop_alarm"
+    assert f("what time is it") is None
+    assert f("remember that the latest news is good") == "remember"          # not web_search
+    assert forced_tool("set a timer", {"web_search"}) is None
+
+
+def test_quick_timer_commands():
+    from reachy_brain.session import quick_command
+    assert quick_command("Set a timer for 10 minutes.") == ("set_timer", "Done.", {"duration": "10 minutes"})
+    assert quick_command("start a timer for two hours and thirty minutes")[2] == {"duration": "two hours and thirty minutes"}
+    assert quick_command("set a 5 minute timer")[2] == {"duration": "5 minute"}
+    assert quick_command("10 minutes timer")[2] == {"duration": "10 minutes"}
+    assert quick_command("set a timer for 10 minutes for the pasta") is None
+    assert quick_command("Cancel the timer.") == ("cancel_timer", "Done.", {"which": ""})
+    assert quick_command("cancel my timers")[2] == {"which": "all"}
+    assert quick_command("Turn off the alarm")[0] == "stop_alarm"
+    assert quick_command("stop the alarm")[0] == "stop_alarm"
+    assert quick_command("what time is it") is None
+
+
+def test_quick_timer_passes_args_and_speaks_say():
+    s, llm, sent, _ = make([], heard="Set a timer for 10 minutes.",
+                           robot={"set_timer": {"say": "Timer set for 10 minutes."}})
+    add_tools(s, ("set_timer", "action"))
+    run_turn(s, sent)
+    assert llm.calls == []
+    call = next(m for m in sent if m.get("type") == "tool_call")
+    assert call["name"] == "set_timer" and call["args"] == {"duration": "10 minutes"}
+    assert said(sent) == ["Timer set for 10 minutes."]
+    assert '"duration": "10 minutes"' in s.turns[-1][1]["tool_calls"][0]["function"]["arguments"]
+    s.close()

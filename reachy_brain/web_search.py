@@ -46,7 +46,8 @@ _TIME = {"day": "d", "week": "w", "month": "m", "year": "y"}
 _CACHE_TTL_S = 300.0
 _MIN_GAP_S = 1.0          # be polite to DuckDuckGo; avoids rate-limit errors on rapid repeat calls
 _MAX_SNIPPET = 150
-_MAX_TITLE = 80
+_MAX_TITLE = 70
+_TOTAL_CHARS = 500        # titles + snippets handed to the model, all results together
 _DEFAULT_RESULTS = 3      # fewer results = fewer tokens for the model to read = faster spoken answer
 
 _lock = threading.Lock()
@@ -69,7 +70,7 @@ def web_search(query: str, kind: str = "web", timelimit: str | None = None, max_
         return {"error": "empty search query"}
     kind = kind if kind in ("web", "news") else "web"
     tl = _TIME.get(timelimit or "")
-    max_results = max(1, min(int(max_results or _DEFAULT_RESULTS), 6))
+    max_results = max(1, min(int(max_results or _DEFAULT_RESULTS), _DEFAULT_RESULTS))   # top 3 only
 
     key = (query.lower(), kind, tl, max_results)
     now = time.monotonic()
@@ -103,10 +104,14 @@ def web_search(query: str, kind: str = "web", timelimit: str | None = None, max_
                 rows = rows[:max_results]
             else:
                 raw = ddgs.text(query, max_results=max_results, timelimit=tl)
-                rows = [{"title": r.get("title"), "snippet": r.get("body"), "url": r.get("href")} for r in raw]
+                rows = [{"title": r.get("title"), "snippet": r.get("body"), "url": r.get("href")}
+                        for r in list(raw)[:max_results]]
             out_rows = []
+            per_item = _TOTAL_CHARS // max(len(rows), 1)
             for r in rows:
-                item = {"title": _clip(r["title"], _MAX_TITLE), "snippet": _clip(r["snippet"], _MAX_SNIPPET)}
+                title = _clip(r["title"], _MAX_TITLE)
+                snip = _clip(r["snippet"], max(30, min(_MAX_SNIPPET, per_item - len(title))))
+                item = {"title": title, "snippet": snip}
                 if r.get("date"):
                     item["date"] = r["date"]
                 out_rows.append(item)
