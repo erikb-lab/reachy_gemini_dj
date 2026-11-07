@@ -178,14 +178,14 @@
 
     var css = document.createElement('style');
     css.textContent =
-      '.gp-pad{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:var(--p-muted)}' +
+      '.gp-pad{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:13.5px;color:var(--p-muted)}' +
       '.gp-pad.ok{color:var(--p-fg);font-weight:600}' +
-      '.gp-row{display:flex;flex-wrap:wrap;gap:8px}#rp-gamepad .pn-btn{text-transform:none}' +
-      '#rp-gamepad .pn-btn[aria-pressed=true]{background:var(--p-accent);border-color:var(--p-accent);color:#fff}' +
-      '.gp-read{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin:14px 0 4px}' +
-      '.gp-read div{background:var(--p-bg);border:1px solid var(--p-border);border-radius:10px;padding:6px 10px}' +
-      '.gp-read dt{color:var(--p-muted);font-size:.78rem}.gp-read dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}' +
-      '.gp-hint{margin:12px 0 0}.gp-link{background:none;border:0;padding:0;font:inherit;color:var(--p-accent);text-decoration:underline;cursor:pointer}' +
+      '.gp-row{display:flex;flex-wrap:wrap;gap:8px}' +
+      '#rp-gamepad .pn-btn[aria-pressed=true]{background:var(--p-accent);border-color:var(--p-accent);color:var(--accent-ink,#fff)}' +
+      '.gp-read{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:0 16px;margin:16px 0 0;font-size:13.5px}' +
+      '.gp-read div{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:6px 0;border-top:1px solid var(--p-border)}' +
+      '.gp-read dt{color:var(--p-muted)}.gp-read dd{margin:0;font-weight:600;color:var(--p-fg);font-variant-numeric:tabular-nums}' +
+      '.gp-hint{margin:14px 0 0}.gp-link{background:none;border:0;padding:0;font:inherit;color:var(--p-accent);text-decoration:underline;cursor:pointer}' +
       '.gp-map{display:grid;gap:6px;margin:8px 0}' +
       '.gp-mrow{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,1.4fr);gap:6px 10px;align-items:center;' +
         'padding:6px 0;border-top:1px solid var(--p-border)}' +
@@ -197,7 +197,7 @@
       '.gp-chip.wait{border-color:var(--p-accent);box-shadow:0 0 0 2px var(--p-accent)}' +
       '.gp-cap{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border-radius:10px;' +
         'background:var(--p-bg);border:1px solid var(--p-accent);margin:8px 0;font-weight:600}' +
-      '.gp-cap .pn-btn{min-height:36px}.gp-mapbox .pn-btn{text-transform:none}' +
+      '.gp-cap .pn-btn{min-height:36px}' +
       '@media (max-width:480px){.gp-mrow{grid-template-columns:1fr}}';
     document.head.appendChild(css);
     paint();
