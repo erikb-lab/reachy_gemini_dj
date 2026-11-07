@@ -45,6 +45,7 @@ class ConfigUpdate(BaseModel):
     model: str | None = None
     voice: str | None = None
     music_volume: float | None = None
+    music_autoplay: bool | None = None
     duck_level: float | None = None
     voice_gain: float | None = None
     hw_speaker_percent: int | None = None
@@ -130,7 +131,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.talk_pressed_hooks: list = []
 
         # Subsystems initialized at startup
-        self.music = MusicPlayer(volume=self.config.music_volume)
+        self.music = MusicPlayer(volume=self.config.music_volume, autoplay=self.config.music_autoplay)
         self.motion: Motion | None = None
         self.audio_pipe: AudioPipeline | None = None
         self.gemini_session = GeminiSession(
@@ -323,6 +324,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
+            self.music.autoplay = bool(self.config.music_autoplay)
             if d.get("hw_speaker_percent") is not None:
                 set_hw_speaker_level(self.config.hw_speaker_percent)
             if (VOICE_KEYS | FRC_KEYS) & d.keys():
@@ -371,7 +373,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         @app.post("/api/music/play")
         def music_play(req: MusicPlayRequest):
-            return self.music.play(req.query)
+            return self.music.play(req.query, added_by="controller")
 
         @app.post("/api/music/pause")
         def music_pause():
@@ -388,6 +390,45 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.post("/api/music/stop")
         def music_stop():
             return self.music.stop()
+
+        # Queue / favorites / seek (music_queue.js)
+        class MusicQueueRequest(BaseModel):
+            action: str
+            which: str = ""
+            id: int | None = None
+
+        @app.post("/api/music/queue")
+        def music_queue(req: MusicQueueRequest):
+            if req.action == "remove" and req.id is not None:
+                res = self.music.remove_item(req.id)
+            elif req.action == "play_next" and req.id is not None:
+                res = self.music.move_next(req.id)
+            else:
+                res = self.music.queue_action(req.action, req.which)
+            if req.action.startswith("autoplay"):
+                self.config.music_autoplay = self.music.autoplay
+                self.config.save()
+            return res
+
+        class MusicFavoriteRequest(BaseModel):
+            action: str
+            id: str = ""
+
+        @app.post("/api/music/favorite")
+        def music_favorite(req: MusicFavoriteRequest):
+            return self.music.favorite(req.action, req.id)
+
+        @app.get("/api/music/favorites")
+        def music_favorites():
+            from . import favorites
+            return {"favorites": favorites.load()}
+
+        class MusicSeekRequest(BaseModel):
+            to: str
+
+        @app.post("/api/music/seek")
+        def music_seek(req: MusicSeekRequest):
+            return self.music.seek(req.to)
 
         # Robot endpoints
         @app.get("/api/robot/moves")
