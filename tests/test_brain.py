@@ -676,7 +676,7 @@ def test_play_args_parsed_without_llm():
     assert q("play daft punk next") == ("play_music", "Okay, queuing that up.", {"query": "daft punk", "when": "next"})
     assert q("Play get lucky now.")[2] == {"query": "get lucky", "when": "now"}
     assert q("play get lucky right now")[2] == {"query": "get lucky", "when": "now"}
-    assert q("queue up 3 jazz songs")[2] == {"query": "jazz", "count": 3}
+    assert q("queue up 3 jazz songs")[2] == {"query": "jazz songs", "count": 3}
     assert q("queue up three songs by daft punk")[2] == {"query": "daft punk", "count": 3}
     assert q("play 5 songs by queen")[2] == {"query": "queen", "count": 5}
     assert q("play 50 songs by queen") is None and q("play 0 songs by queen") is None
@@ -876,9 +876,9 @@ def test_frc_hint_names_args_and_follows_history():
 
 def test_cue_and_q_spellings_and_counts():
     from reachy_brain.session import quick_command as q, forced_tool, play_hint
-    assert q("Please cue 10 Minecraft songs.") == ("play_music", "Okay, queuing that up.", {"query": "minecraft", "count": 10})
-    assert q("queue 10 minecraft songs")[2] == {"query": "minecraft", "count": 10}
-    assert q("Q up 3 jazz songs")[2] == {"query": "jazz", "count": 3}
+    assert q("Please cue 10 Minecraft songs.") == ("play_music", "Okay, queuing that up.", {"query": "minecraft songs", "count": 10})
+    assert q("queue 10 minecraft songs")[2] == {"query": "minecraft songs", "count": 10}
+    assert q("Q up 3 jazz songs")[2] == {"query": "jazz songs", "count": 3}
     assert q("cue up three songs by daft punk")[2] == {"query": "daft punk", "count": 3}
     allt = {"play_music", "web_search"}
     assert forced_tool("Please cue some abba", allt) == "play_music"

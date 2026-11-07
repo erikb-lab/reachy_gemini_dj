@@ -314,7 +314,9 @@ def quick_command(heard: str) -> tuple[str, str, dict] | None:
         if m := re.match(rx, t):
             n = _num(m.group("n"))
             if n and 1 <= n <= 10 and m.group("q") not in _GENERIC_Q:
-                return "play_music", "Okay, queuing that up.", {"query": m.group("q"), "count": n}
+                # keep "songs" in the search: "minecraft" alone finds gameplay videos, "minecraft songs" finds music
+                q = m.group("q") if " by " in rx else m.group("q") + " songs"
+                return "play_music", "Okay, queuing that up.", {"query": q, "count": n}
     return None
 
 
