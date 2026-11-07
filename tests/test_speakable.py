@@ -39,3 +39,11 @@ def test_records_and_scores():
 def test_won_after_a_team_number_is_kept_apart():
     assert speakable("Team 1678 won in 2025.") == "Team one six seven eight has won in twenty twenty five."
     assert speakable("They won 120-98.") == "They won by a score of one hundred twenty to ninety eight."
+
+
+def test_pit_codes_and_clock_sentence_end():
+    assert speakable("Your pit is A3.") == "Your pit is A three."
+    assert "B twelve" in speakable("Go to pit B12")
+    assert speakable("Remind you at 3:45 PM.") == "Remind you at three forty five p m."
+    assert speakable("Alarm at 7:30 a.m. tomorrow") == "Alarm at seven thirty a m tomorrow"
+    assert speakable("Alarm set for 7:30 AM tomorrow.") == "Alarm set for seven thirty a m tomorrow."

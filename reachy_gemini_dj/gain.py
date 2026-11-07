@@ -191,13 +191,15 @@ def sink_command() -> list[str]:
     ]
 
 
-def decoder_command(stream_url: str, headers: dict[str, str] | None = None) -> list[str]:
-    """ffmpeg decoding the remote stream to raw s16le PCM on stdout."""
+def decoder_command(stream_url: str, headers: dict[str, str] | None = None, start: float = 0.0) -> list[str]:
+    """ffmpeg decoding the remote stream to raw s16le PCM on stdout (start > 0: seek to that many seconds)."""
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-vn"]
     if headers:
         cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+    if start and start > 0:
+        cmd += ["-ss", f"{start:.2f}"]
     cmd += [
-        "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
         "-i", stream_url,
         "-f", "s16le", "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE), "pipe:1",
     ]

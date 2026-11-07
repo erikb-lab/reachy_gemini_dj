@@ -52,6 +52,11 @@ def scan(get_frame: Callable[[], object], timeout_s: float = 6.0, interval_s: fl
 _EVENT = re.compile(r"^([a-z0-9]{4,})$", re.I)       # 2026mokc, demo3528, ...
 
 
+
+def _is_host(host: str, domain: str) -> bool:
+    """Exact domain or a subdomain of it ("evilfrc.nexus" is neither)."""
+    return host == domain or host.endswith("." + domain)
+
 def parse_frc(text: str) -> dict:
     """Pull an FRC event key and team number out of a Nexus or The Blue Alliance link, if present."""
     out: dict = {"source": "", "event": "", "team": ""}
@@ -60,9 +65,9 @@ def parse_frc(text: str) -> dict:
     except ValueError:
         return out
     host = (u.hostname or "").lower()
-    if host.endswith("frc.nexus"):
+    if _is_host(host, "frc.nexus"):
         out["source"] = "nexus"
-    elif host.endswith("thebluealliance.com"):
+    elif _is_host(host, "thebluealliance.com"):
         out["source"] = "tba"
     else:
         return out

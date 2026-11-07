@@ -35,6 +35,11 @@ class Segmenter:
     def speaking(self) -> bool:
         return self._speaking
 
+    @property
+    def voiced_frames(self) -> int:
+        """Voiced 30 ms frames in the utterance so far (0 when idle)."""
+        return self._voiced if self._speaking else 0
+
     def reset(self) -> None:
         self._buf = b""
         self._pre.clear()

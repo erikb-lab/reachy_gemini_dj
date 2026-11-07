@@ -30,6 +30,14 @@ questions.
 - **Weather and web search.** Both are free (Open-Meteo and DuckDuckGo) and need no keys.
 - **FRC helper.** Scan your team's FRC Nexus QR code, hear queuing alerts, and look up any team's history and
   results ([below](#frc-robotics-helper-nexus--the-blue-alliance)).
+- **Timers, reminders and alarms.** Say "set a timer for 10 minutes", "remind me in 20 minutes to check the
+  battery" or "wake me at 7:30". They are kept on the robot, survive a restart, and ring with a chime, a little
+  move and a spoken message until you speak, press talk, or say "stop the alarm".
+- **Memory.** Say "remember that our pit is A3", "what do you remember?" or "forget the pit". Facts are stored on
+  the robot, and you can see, add and delete them in the **Memory** card in Settings.
+- **Push-to-talk for loud rooms.** In Settings, set **Listening** to push-to-talk. Then hold the big button on the
+  controller page (or the Space bar) while you talk. A future physical button can use the same `/api/ptt` endpoint
+  ([below](#push-to-talk-api)).
 - **Google Calendar, Tasks and Gmail (optional, read-only for Gmail).** Connect them in the **Google** tab.
 - **Controller web page** at `http://reachy-mini.local:8042`. It has a dark mode, live volume sliders for the
   music and for Reachy's voice, and works on phones.
@@ -93,6 +101,14 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
    - `--gemini-key` for Gemini help
 4. Keep the brain computer from going to sleep.
 
+### Run the brain as a service
+On a Linux laptop with systemd you can let the brain start by itself and restart if it crashes. Run
+`tools/install_brain_service.sh` with the paths to the python venv, `llama-server`, the model and the mmproj
+(`--python`, `--llama-server`, `--model`, `--mmproj`). It writes a user service called `reachy-brain` and starts it.
+Add `--at-boot` to start it at boot instead of at login. Logs go to the journal:
+`journalctl --user -u reachy-brain -f`. The first start takes a couple of minutes while the models load.
+The undo steps are at the bottom of the script.
+
 ### Voice backend (Settings)
 - **Auto** (default) uses the local brain first. If the brain can't be reached at start, or fails 3 times in a
   row, the app switches to Gemini Live, which needs an API key. It switches back when the brain is reachable and
@@ -105,19 +121,26 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
 - **No made-up answers.** Requests for the camera, weather, web, FRC data, emotions, dances and music must call
   the matching tool first. The small model can't answer them from memory.
 - **Spoken numbers.** Numbers are spoken as words. Team numbers are read digit by digit, so 254 is "two five four".
-  Records like 9-1-0 are read as "nine wins, one loss, zero ties".
+  Records like 9-1-0 are read as "nine wins, one loss, zero ties", and pit codes like A3 as "A three".
+- **Ready-made answers.** Weather, team lookups, the next-match briefing, rankings, timers and memory build their
+  spoken answer in code, so they skip the slow second pass through the language model. For slow lookups Reachy
+  says "Let me check the weather" (or similar) straight away and tilts its head while it thinks.
+- **Fast restarts.** The brain saves its warmed-up prompt to disk (`--slot-cache-dir`, default
+  `~/.cache/reachy_brain/slots`, about 200 MB per file, newest 3 kept), so a restart skips the long warm-up.
 - **Speed.** These timings come from a CPU-only laptop (Intel i5-10310U), measured from when you stop talking
   to Reachy's first word:
 
-  | Request | Time to first word |
-  |---|---|
-  | Music controls (pause, play, skip, stop) | about 1.5 s |
-  | Chat | 3-5 s |
-  | Play music, emotions | 7-14 s |
-  | Weather, team lookup | about 16 s |
-  | Web search | about 25 s |
-  | Camera | about 60 s |
-  | First start (one time) | about 80 s warm-up |
+  | Request | First word | Full answer starts |
+  |---|---|---|
+  | Music controls, set or cancel a timer | about 1.5 s | same |
+  | Chat | 3-4 s | same |
+  | Memory ("remember…", "what do you remember?") | 7-12 s | same |
+  | Play music, emotions | 7-14 s | same |
+  | Weather, team lookup, next match | about 1 s ("Let me check…") | 10-12 s |
+  | Web search | about 1 s ("Let me look that up") | about 23 s |
+  | Camera | about 1 s ("Let me take a look") | about 50 s |
+  | Brain restart | under 1 s (saved warm-up) | |
+  | Very first start, or after changing tools or settings that reach the brain | about 110 s warm-up | |
 
 ### Privacy and network safety
 - **The Gemini API key never leaves the robot.** For "ask Gemini", the brain asks the robot, and the robot calls
@@ -126,9 +149,21 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
 - **Private data and the camera need someone to have spoken.** Gmail, Calendar, Tasks, QR scanning and camera
   images are only given out within 2 minutes of someone speaking to the robot. A brain can't read them silently in
   the background. Every camera image sent to the brain shows up in the event feed, and so does every blocked request.
-- **Use a network you trust.** The Reachy Mini's own control pages, like this app's settings page, have no
-  password. Anyone on the same Wi-Fi can change the settings. Keep the robot and the brain off guest or public
-  networks.
+- **Memory stays on the robot.** Remembered facts are stored on the robot and sent only to the brain (or Gemini)
+  you configured, so it can use them. The app logs how many facts there are, never what they say.
+- **The brain gets your memory and notes.** Whoever controls the **Brain URL** setting receives remembered facts
+  and your extra instructions, so every change to it is shown in the event feed.
+- **Use a network you trust.** The Reachy Mini's own control pages, like this app's settings page and the
+  push-to-talk endpoint, have no password. Anyone on the same Wi-Fi can change the settings. Keep the robot and the
+  brain off guest or public networks.
+
+### Push-to-talk API
+For a future hardware button (an ESP32 button, a foot pedal bridge, and so on). Set **Listening** to push-to-talk
+first.
+- `POST http://reachy-mini.local:8042/api/ptt` with `{"down": true}` when pressed and `{"down": false}` when released.
+- `POST http://reachy-mini.local:8042/api/ptt/toggle` for one-button devices: tap to start, tap to stop.
+- Pressing talk also stops Reachy mid-sentence and silences a ringing alarm. A press held for 30 seconds releases
+  itself.
 
 ---
 
@@ -145,7 +180,9 @@ This is for FIRST Robotics Competition events. It uses no Google services.
    looks like `https://frc.nexus/<event>/<team>?key=...`. The code is decoded on the robot, and the event and team
    are filled in. Show one code at a time: if several are in view, Reachy asks for just yours. The private team
    link stays on the robot and is never spoken, shown or sent to any model.
-4. Ask "When's our next match?", "What's queuing now?", "Where is team 254's pit?" or "Show me the rankings."
+4. Ask "Tell me about our next match" (partners and opponents with their names, records and ranks), "What's
+   queuing now?", "Where is team 254's pit?" or "Show me the rankings." Blue Alliance answers are cached for a
+   minute at events and longer for team history, so repeat questions are instant and the free API isn't overused.
    With **Queuing alerts** on, Reachy says out loud when your match is queuing soon, now queuing or on deck. It
    checks Nexus every 30 seconds.
 

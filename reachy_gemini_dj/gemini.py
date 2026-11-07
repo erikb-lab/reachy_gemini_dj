@@ -16,23 +16,18 @@ from google import genai
 from google.genai import types
 
 from .gain import percent_to_volume, volume_to_percent
+from .music import speakable
+from .memory import live_instruction_line
 
 log = logging.getLogger(__name__)
 
+MEMORY_TOOLS = ("remember", "forget", "list_memories")
+
 VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
 
-SYSTEM_PROMPT = """You are Reachy Mini, an expressive, witty tabletop robot DJ and companion.
-You speak aloud to the user using audio, so keep your spoken responses concise, punchy, and conversational (1-2 sentences unless details were requested).
+SYSTEM_PROMPT = """You are Reachy Mini, a witty, expressive tabletop robot DJ and companion. You talk out loud, so keep replies short and conversational, a sentence or two unless asked for more, and keep them extra brief while music plays. Never say JSON or tool names aloud.
 
-Capabilities:
-1. DJ / Music: You search, stream, and control music tracks. Duck or pause when interacting.
-2. Motion: You can turn your head, perform built-in dances, and express emotions with head and antenna gestures. When expressing a strong mood or reaction, invoke the robot motion tools.
-3. Google Workspace: You can check or schedule calendar events, list or complete tasks, and check unread emails when the user asks.
-
-Guidelines:
-- Never say JSON or function call names aloud.
-- When music plays, keep responses short so the user can enjoy the music.
-- If Google is not connected, politely remind the user they can link their account in the settings page.
+You can play and control music, move your head, dance and show emotions, check the user's Google calendar, tasks and email (if Google is not linked, tell them to connect it in the settings page), remember facts you are asked to remember, and set timers and alarms. Use your tools for these instead of just saying you did them, and use a motion tool when you react strongly to something.
 """
 
 
@@ -42,11 +37,54 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         # Music Tools
         types.FunctionDeclaration(
             name="play_music",
-            description="Search and play a song, genre, artist, or playlist.",
+            description="Play or queue music for a song, artist, genre or playlist.",
             parameters=types.Schema(
                 type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="The song, artist, or music genre to play.")},
+                properties={
+                    "query": types.Schema(type="STRING", description="Song, artist or genre."),
+                    "count": types.Schema(type="INTEGER", description="How many different songs, 1-10.", minimum=1, maximum=10),
+                    "when": types.Schema(type="STRING", enum=["now", "next", "last"], description="now = play immediately, next = after this song, last = end of queue (default)."),
+                },
                 required=["query"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="music_queue",
+            description="Show or change the music queue.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "action": types.Schema(type="STRING", enum=["now_playing", "list", "clear", "shuffle", "remove", "autoplay_on", "autoplay_off"]),
+                    "which": types.Schema(type="STRING", description="For remove: position, next, last or title words."),
+                },
+                required=["action"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="seek_music",
+            description="Jump within the current song.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"to": types.Schema(type="STRING", description="Time like 1:30, +30, back 15 seconds, or start.")},
+                required=["to"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="adjust_volume",
+            description="Make the music a bit louder or quieter.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"direction": types.Schema(type="STRING", enum=["up", "down"])},
+                required=["direction"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="favorite_song",
+            description="Save the current song, play, or list favorites.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"action": types.Schema(type="STRING", enum=["save", "play", "list"])},
+                required=["action"],
             ),
         ),
         types.FunctionDeclaration(
@@ -144,12 +182,14 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         ),
         types.FunctionDeclaration(
             name="frc_team_info",
-            description="Look up any FRC team (no event needed): name, hometown, rookie year, recent competitions "
-                        "and results, and awards. If an event is set, also its pit location and rank there.",
+            description="Look up any FRC team, no event needed: profile, results for a season or a specific event "
+                        "(Champs, Duluth), awards, or full history.",
             parameters=types.Schema(
                 type="OBJECT",
                 properties={"team": types.Schema(type="STRING", description="Team number, e.g. 254; empty for our team."),
-                            "year": types.Schema(type="INTEGER", description="Season for detailed results (default: current).")},
+                            "year": types.Schema(type="INTEGER", description="Season, e.g. 2019 (default: latest)."),
+                            "event": types.Schema(type="STRING", description="Event name, city or key, e.g. Duluth or Champs."),
+                            "detail": types.Schema(type="STRING", description="'all' for full history.")},
             ),
         ),
         types.FunctionDeclaration(
@@ -159,6 +199,30 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 type="OBJECT",
                 properties={"top": types.Schema(type="INTEGER", description="How many top teams (default 5, max 10).")},
             ),
+        ),
+        # Long-term memory
+        types.FunctionDeclaration(
+            name="remember",
+            description="Save a short fact the user wants remembered, written in third person (e.g. \"The team's pit is A3\").",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"fact": types.Schema(type="STRING", description="The fact to remember.")},
+                required=["fact"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="forget",
+            description="Forget a remembered fact. Say \"all\" only if the user asked to forget everything.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"fact": types.Schema(type="STRING", description="Which fact to forget, or \"all\".")},
+                required=["fact"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_memories",
+            description="List everything you were asked to remember.",
+            parameters=types.Schema(type="OBJECT", properties={}),
         ),
         # Google Workspace Tools
         types.FunctionDeclaration(
@@ -229,6 +293,62 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 },
             ),
         ),
+        # Timers, reminders, alarms (see timers.py; parsing of the free text happens there)
+        types.FunctionDeclaration(
+            name="set_timer",
+            description="Start a countdown timer, or a reminder if label says what for.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "duration": types.Schema(type="STRING", description="Length as spoken, e.g. '10 minutes', 'an hour and a half'."),
+                    "label": types.Schema(type="STRING", description="Optional: timer name or what to remind about."),
+                },
+                required=["duration"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="set_alarm",
+            description="Set an alarm for a clock time (next occurrence).",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "time": types.Schema(type="STRING", description="Clock time as spoken, e.g. '7:30 am', '19:30', '7 tonight'."),
+                    "label": types.Schema(type="STRING", description="Optional: alarm name or what to remind about."),
+                },
+                required=["time"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_timers",
+            description="List active timers, reminders and alarms.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="cancel_timer",
+            description="Cancel a timer or alarm by label or length, 'all', or empty for the latest.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"which": types.Schema(type="STRING", description="Label, length, 'all', or empty.")},
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="stop_alarm",
+            description="Silence a timer or alarm that is ringing.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="robot_sensors",
+            description="Read Reachy's motion sensor: tilt, whether it's moving or being held, and its internal temperature.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
+        types.FunctionDeclaration(
+            name="quiet_mode",
+            description="Go quiet: stop listening and rest for a while (default 30 minutes), then wake up on your own.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"minutes": types.Schema(type="INTEGER", description="How long to stay quiet, 1 to 480 (default 30).")},
+            ),
+        ),
     ]
 
     tools = [types.Tool(function_declarations=declarations)]
@@ -239,6 +359,12 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
 
 class GeminiSession:
     """Manages the connection, audio streams, and tool execution with Gemini Live."""
+
+    memory = None                 # memory.Memory, set by main.py (long-term facts; see memory.py)
+    quiet = None                  # qol.QuietMode, set by main.py
+    imu = None                    # imu.ImuWatcher, set by main.py
+    on_turn_done = None           # called (no args) when Gemini finishes a turn; set by main.py
+    on_connected = None           # called (no args) each time the Live session connects; set by main.py
 
     def __init__(
         self,
@@ -346,6 +472,10 @@ class GeminiSession:
         instructions = SYSTEM_PROMPT
         if self.config.extra_instructions:
             instructions += f"\n\nUser Context:\n{self.config.extra_instructions}"
+        if self.memory is not None:
+            line = live_instruction_line(self.memory.texts())
+            if line:
+                instructions += "\n\n" + line
 
         kw: dict[str, Any] = dict(
             response_modalities=["AUDIO"],
@@ -394,6 +524,11 @@ class GeminiSession:
             self._connected = True
             self._session = session
             self.on_event("gemini", f"Connected to {model}")
+            if self.on_connected:
+                try:
+                    self.on_connected()
+                except Exception:
+                    log.exception("on_connected hook failed")
 
             # Flush stale mic buffer
             while not self._mic_queue.empty():
@@ -449,6 +584,12 @@ class GeminiSession:
                     if sc.output_transcription and sc.output_transcription.text:
                         self.on_said(sc.output_transcription.text)
 
+                    if getattr(sc, "turn_complete", False) and self.on_turn_done:
+                        try:
+                            self.on_turn_done()
+                        except Exception:
+                            log.exception("on_turn_done hook failed")
+
                 upd = getattr(msg, "session_resumption_update", None)
                 if upd and upd.resumable and upd.new_handle:
                     self._handle = upd.new_handle
@@ -460,7 +601,8 @@ class GeminiSession:
         responses = []
         for fc in tool_call.function_calls or []:
             args = dict(fc.args or {})
-            log.info("Tool invocation requested: %s with args %s", fc.name, args)
+            log.info("Tool invocation requested: %s with args %s", fc.name,
+                     "<hidden>" if fc.name in MEMORY_TOOLS else args)      # memory is personal: never log its text
             try:
                 res = await asyncio.to_thread(self.execute_tool, fc.name, args)
             except Exception as e:
@@ -477,7 +619,20 @@ class GeminiSession:
         try:
             # Music
             if name == "play_music":
-                return self.music.play(args.get("query", ""))
+                return speakable(self.music.play(args.get("query", ""), args.get("count", 1), args.get("when", "")))
+            elif name == "music_queue":
+                res = self.music.queue_action(args.get("action", ""), args.get("which", ""))
+                self.config.music_autoplay = self.music.autoplay
+                return speakable(res)
+            elif name == "seek_music":
+                return speakable(self.music.seek(args.get("to", "")))
+            elif name == "adjust_volume":
+                res = self.music.adjust_volume(args.get("direction", ""))
+                if "volume" in res:
+                    self.config.music_volume = res["volume"]
+                return speakable(res)
+            elif name == "favorite_song":
+                return speakable(self.music.favorite(args.get("action", "")))
             elif name == "pause_music":
                 return self.music.pause()
             elif name == "resume_music":
@@ -518,6 +673,26 @@ class GeminiSession:
                 if self.motion:
                     return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
                 return {"error": "Robot motion not ready yet"}
+
+            elif name in MEMORY_TOOLS:
+                if self.memory is None:
+                    return {"error": "Memory is not available."}
+                if name == "remember":
+                    return self.memory.tool_remember(args.get("fact", ""))
+                if name == "forget":
+                    return self.memory.tool_forget(args.get("fact", ""))
+                return self.memory.tool_list()
+            elif name in ("set_timer", "set_alarm", "list_timers", "cancel_timer", "stop_alarm"):
+                timers = getattr(self, "timers", None)
+                return timers.handle(name, args) if timers else {"error": "Timers are not ready yet"}
+
+            elif name == "robot_sensors":
+                imu = getattr(self, "imu", None)
+                return imu.sensors() if imu else {"error": "My motion sensor is not available."}
+
+            elif name == "quiet_mode":
+                quiet = getattr(self, "quiet", None)
+                return quiet.enter(args.get("minutes", 30)) if quiet else {"error": "Quiet mode is not ready yet"}
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)

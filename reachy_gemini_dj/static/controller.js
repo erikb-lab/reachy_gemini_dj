@@ -237,5 +237,15 @@ async function poll() {
 }
 renderConn();
 poll(); setInterval(poll, 1000);
+
+/* Alarms use the robot's clock, which ships set to London time: tell it this browser's time zone once. */
+subs.add(function tzOnce(s) {
+  subs.delete(tzOnce);
+  let tz = '';
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+  if (tz && s.config && s.config.timezone !== tz && !s.config.timezone) {
+    fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({timezone: tz})});
+  }
+});
 document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 })();

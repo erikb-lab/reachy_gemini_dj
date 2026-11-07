@@ -18,7 +18,7 @@ SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "get_weather",
-        "description": "Get the current weather and today's high and low for a city. Use for any weather question.",
+        "description": "Get the current weather and today's and tomorrow's forecast for a city. Use for any weather question.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -48,8 +48,35 @@ def _get(url: str, params: dict) -> dict:
         return json.load(r)
 
 
+def _num(x: float) -> str:
+    n = round(x)
+    return f"minus {-n}" if n < 0 else str(n)
+
+
+def _say(place: str, c: dict, d: dict, units: str) -> str:
+    """The spoken answer, templated here so the model never has to read the forecast (no LLM round)."""
+    deg = "degrees" if units == "fahrenheit" else "degrees Celsius"
+    cond = _WMO.get(c["weather_code"], "unsettled")
+    s = (f"Right now in {place} it's {_num(c['temperature_2m'])} {deg} and {cond}. "
+         f"Today's high is {_num(d['temperature_2m_max'][0])} and the low is {_num(d['temperature_2m_min'][0])}")
+    pop = (d.get("precipitation_probability_max") or [None])[0]
+    if pop is not None:
+        s += f", with a {round(pop)} percent chance of rain" if pop else ", with no rain expected"
+    s += "."
+    try:
+        code, hi, lo = d["weather_code"][1], d["temperature_2m_max"][1], d["temperature_2m_min"][1]
+        tpop = (d.get("precipitation_probability_max") or [None, None])[1]
+        s += f" Tomorrow looks {_WMO.get(code, 'unsettled')} with a high of {_num(hi)} and a low of {_num(lo)}"
+        if tpop:
+            s += f", and a {round(tpop)} percent chance of rain"
+        s += "."
+    except (KeyError, IndexError, TypeError):
+        pass
+    return s
+
+
 def get_weather(location: str, units: str = "fahrenheit") -> dict[str, Any]:
-    """Return {"summary": "..."} or {"error": "..."}. Never raises."""
+    """Return {"say": "..."} (a ready-to-speak answer) or {"error": "..."}. Never raises."""
     location = (location or "").strip()
     if not location:
         return {"error": "no location given; ask the user which city"}
@@ -69,23 +96,14 @@ def get_weather(location: str, units: str = "fahrenheit") -> dict[str, Any]:
         if not places:
             return {"error": f"could not find a place called {location}"}
         p = places[0]
-        deg = "°F" if units == "fahrenheit" else "°C"
         w = _get("https://api.open-meteo.com/v1/forecast", {
-            "latitude": p["latitude"], "longitude": p["longitude"], "timezone": "auto", "forecast_days": 1,
+            "latitude": p["latitude"], "longitude": p["longitude"], "timezone": "auto", "forecast_days": 2,
             "temperature_unit": units, "wind_speed_unit": "mph" if units == "fahrenheit" else "kmh",
             "current": "temperature_2m,apparent_temperature,weather_code,wind_speed_10m",
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
         })
         c, d = w["current"], w["daily"]
-        place = ", ".join(x for x in (p.get("name"), p.get("admin1") if p.get("country_code") == "US" else p.get("country")) if x)
-        wind_u = "mph" if units == "fahrenheit" else "km/h"
-        s = (f"{place}: {round(c['temperature_2m'])}{deg} and {_WMO.get(c['weather_code'], 'unsettled')}, "
-             f"feels like {round(c['apparent_temperature'])}{deg}, wind {round(c['wind_speed_10m'])} {wind_u}. "
-             f"Today's high {round(d['temperature_2m_max'][0])}{deg}, low {round(d['temperature_2m_min'][0])}{deg}")
-        pop = d.get("precipitation_probability_max", [None])[0]
-        if pop is not None:
-            s += f", {pop}% chance of precipitation"
-        out = {"summary": s + "."}
+        out = {"say": _say(p.get("name") or location, c, d, units)}
         _cache[key] = (time.monotonic(), out)
         return out
     except Exception as e:

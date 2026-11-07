@@ -8,6 +8,7 @@ from __future__ import annotations
 import collections
 import datetime
 import logging
+import re
 import shutil
 import threading
 import time
@@ -19,17 +20,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
 
-from .audio import AudioPipeline, set_hw_speaker_level
+from .audio import AudioPipeline, LISTEN_MODES, set_hw_speaker_level
 from .backends import VoiceBackend
 from .config import Config
 from .frc import FRC
+from .timers import Timers, set_timezone, _dt as local_dt
 from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
 from .gain import clamp_duck, clamp_volume
+from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
 from .remote_session import RemoteSession
+from .imu import ImuReactions, ImuWatcher
+from .qol import ConversationLog, Greeter, QuietMode, brain_status
 
 log = logging.getLogger("reachy_gemini_dj")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -43,6 +48,7 @@ class ConfigUpdate(BaseModel):
     model: str | None = None
     voice: str | None = None
     music_volume: float | None = None
+    music_autoplay: bool | None = None
     duck_level: float | None = None
     voice_gain: float | None = None
     hw_speaker_percent: int | None = None
@@ -59,14 +65,57 @@ class ConfigUpdate(BaseModel):
     nexus_api_key: str | None = None
     tba_api_key: str | None = None
     frc_alerts: bool | None = None
+    listen_mode: str | None = None          # "always" | "push_to_talk"
+    timezone: str | None = None             # IANA name, sent by the controller page
+    greet_on_start: bool | None = None
+    imu_reactions: bool | None = None
 
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
 VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
 
 
+class MemoryAdd(BaseModel):
+    text: str
+
+
+class MemoryDelete(BaseModel):
+    id: str
+
+
+class PttRequest(BaseModel):
+    down: bool
+
+
+class MusicPlayRequest(BaseModel):
+    query: str
+
+
+class MusicQueueRequest(BaseModel):
+    action: str
+    which: str = ""
+    id: int | None = None
+
+
+class MusicFavoriteRequest(BaseModel):
+    action: str
+    id: str = ""
+
+
+class MusicSeekRequest(BaseModel):
+    to: str
+
+
 class MuteUpdate(BaseModel):
     muted: bool
+
+
+class QuietRequest(BaseModel):
+    minutes: int = 30
+
+
+class TimerCancel(BaseModel):
+    id: int
 
 
 class MoveRequest(BaseModel):
@@ -107,9 +156,10 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.heard_text = ""
         self.said_text = ""
         self.mic_level = 0.0
+        self.talk_pressed_hooks: list = []
 
         # Subsystems initialized at startup
-        self.music = MusicPlayer(volume=self.config.music_volume)
+        self.music = MusicPlayer(volume=self.config.music_volume, autoplay=self.config.music_autoplay)
         self.motion: Motion | None = None
         self.audio_pipe: AudioPipeline | None = None
         self.gemini_session = GeminiSession(
@@ -132,6 +182,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_barge_in=lambda: self.audio_pipe.clear_voice() if self.audio_pipe else None,
             on_heard=self._set_heard_turn,
             on_said=self._set_said,
+            on_state=self._on_brain_state,
             is_speaking=lambda: bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
             tool_specs=self._tool_specs,
             get_frame=self._get_frame,
@@ -144,31 +195,107 @@ class ReachyGeminiDJ(ReachyMiniApp):
             is_idle=lambda: not (self.audio_pipe and (self.audio_pipe._is_robot_speaking or self.audio_pipe._user_speaking)),
         )
 
+        # Long-term memory ("remember our pit is A3"): tools use it via execute_tool, both brains get the facts
+        self.memory = Memory()
+        self.gemini_session.memory = self.memory
+        self.local_session.get_memory = self.memory.texts
+        self._memory_sync_lock = threading.Lock()
+        self._memory_sync_pending = False
+
         # FRC: Nexus QR scan, live queuing alerts, Blue Alliance rankings (tools run on the robot; keys stay here)
         self.frc = FRC(self.config, get_frame=self._get_frame, say=self.voice.say, on_event=self.record_event)
         self.gemini_session.frc = self.frc
 
+        # Timers / reminders / alarms: persisted, rung through the voice backend; user speech dismisses a ringing one
+        self.timers = Timers(
+            say=self.voice.say, on_event=self.record_event, music=self.music,
+            play_pcm=lambda pcm: self.audio_pipe.play_voice(pcm) if self.audio_pipe else None,
+            # In push-to-talk mode loud rooms are the norm, so mic noise never dismisses; the talk button does.
+            user_speech_age=lambda: (time.monotonic() - (self.audio_pipe._last_user_speech - 0.7))
+            if self.audio_pipe and self.config.listen_mode != "push_to_talk" else 1e9,
+        )
+        self.gemini_session.timers = self.timers
+        self.talk_pressed_hooks.append(self.timers.dismiss)
+        set_timezone(self.config.timezone)
+
+        # Quality of life (qol.py): conversation log, quiet mode, "I'm ready" greeting
+        self.convo = ConversationLog(backend=lambda: self.voice.active_name)
+        self.quiet = QuietMode(set_muted=self._set_muted, say=self.voice.say, on_event=self.record_event)
+        self.gemini_session.quiet = self.quiet
+        self.talk_pressed_hooks.append(self.quiet.on_talk)
+        self.greeter = Greeter(say=self.voice.say, enabled=lambda: self.config.greet_on_start, is_quiet=lambda: self.quiet.active)
+        self.local_session.on_ready = lambda: self.greeter.ready("local")
+        self.gemini_session.on_connected = lambda: self.greeter.ready("gemini")
+        self.local_session.on_turn_done = self.convo.turn_done
+        self.gemini_session.on_turn_done = self.convo.turn_done
+
+        # IMU (imu.py): events (picked up / bumped / shaken / tipped over) -> short spoken reactions; robot_sensors tool
+        self.imu = ImuWatcher(
+            read_imu=self._read_imu, suppress=self._imu_suppressed,
+            no_bump=lambda: self.music.is_playing or bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
+            on_event=lambda kind, info: self.imu_reactions.on_event(kind, info),
+        )
+        self.imu_reactions = ImuReactions(
+            say=self.voice.say, emotion=lambda name: self.motion.emotion(name) if self.motion else None,
+            enabled=lambda: self.config.imu_reactions, is_idle=self.voice.is_idle,
+            is_quiet=lambda: self.quiet.active,
+            motion_free=lambda: bool(self.motion and self.config.motion_enabled and not self.motion.moving()),
+        )
+        self.gemini_session.imu = self.imu
+
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
+
+    # Callbacks run whenever talk is pressed (push-to-talk button, space bar, /api/ptt). Other features append here,
+    # e.g. timers: `app.talk_pressed_hooks.append(timers.dismiss_alarm)`. Each is called with no arguments.
+    def _on_talk_pressed(self) -> None:
+        for fn in list(self.talk_pressed_hooks):
+            try:
+                fn()
+            except Exception:
+                log.exception("talk-pressed hook failed")
+
+    def _on_brain_state(self, state: str, detail: str = "") -> None:
+        """Local brain reported its state: tilt the head while it thinks (never for Gemini Live)."""
+        m = self.motion
+        if m is not None:
+            m.thinking(state == "thinking")
 
     def _get_frame(self):
         media = getattr(self._mini, "media", None)
         fn = getattr(media, "get_frame", None)
         return fn() if callable(fn) else None
 
+    def _read_imu(self):
+        """Latest cached IMU dict from the SDK (50 Hz cache, cheap), or None (Lite / simulator / stale)."""
+        return getattr(self._mini, "imu", None)
+
+    def _imu_suppressed(self) -> bool:
+        """Ignore the IMU while Reachy moves itself, is limp for hand posing, or is in quiet mode."""
+        m = self.motion
+        return bool(self.quiet.active or (m is not None and m.moving()))
+
+    def _set_muted(self, muted: bool) -> None:
+        self.muted = bool(muted)
+        if self.audio_pipe:
+            self.audio_pipe.set_mute(self.muted)
+
     def _set_heard(self, text: str) -> None:
+        self.convo.heard_fragment(text)
         self.heard_text = (self.heard_text + " " + text).strip()[-300:]
 
     def _set_heard_turn(self, text: str) -> None:
         """Local brain: 'heard' is one complete utterance and starts a new turn (Gemini streams fragments instead)."""
+        self.convo.heard_utterance(text)
         self.heard_text = text.strip()[-300:]
         self.said_text = ""
 
     def _set_said(self, text: str) -> None:
+        self.convo.said(text)
         self.said_text = (self.said_text + " " + text).strip()[-300:]
 
     def record_event(self, kind: str, text: str) -> None:
-        t = datetime.datetime.now().strftime("%H:%M:%S")
+        t = local_dt(time.time()).strftime("%H:%M:%S")
         self.events.appendleft({"t": t, "kind": kind, "text": text})
 
     def _setup_routes(self) -> None:
@@ -202,18 +329,23 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.5.1",
+                "version": "0.6.0",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
                 "muted": self.muted,
                 "mic_level": self.mic_level,
+                "listen_mode": self.audio_pipe.listen_mode if self.audio_pipe else self.config.listen_mode,
+                "ptt_active": bool(self.audio_pipe and self.audio_pipe.ptt_active),
                 "heard": self.heard_text,
                 "said": self.said_text,
                 "ffmpeg": bool(shutil.which("ffmpeg")),
                 "voices": VOICES,
                 "active_backend": self.voice.active_name,
-                "brain": self.voice.status(),
+                "brain": brain_status(self.voice.status(), self.local_session.state, self.convo.last_latency("local")),
+                "conversation": self.convo.listing(),
+                "quiet": self.quiet.status(),
+                "imu": self.imu.status(),
                 "config": {
                     "api_key_set": bool(self.config.api_key),
                     "model": self.config.model,
@@ -227,17 +359,22 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "motion_enabled": self.config.motion_enabled,
                     "expressive": self.config.expressive,
                     "dance_enabled": self.config.dance_enabled,
+                    "timezone": self.config.timezone,
+                    "greet_on_start": self.config.greet_on_start,
+                    "imu_reactions": self.config.imu_reactions,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
                     "frc_team": self.config.frc_team,
                     "frc_event": self.config.frc_event,
                     "frc_alerts": self.config.frc_alerts,
+                    "listen_mode": self.config.listen_mode,
                     "nexus_key_set": bool(self.config.nexus_api_key),
                     "tba_key_set": bool(self.config.tba_api_key),
                     "nexus_linked": bool(self.config.nexus_link),
                 },
                 "frc": dict(self.frc.status),
+                "timers": self.timers.status(),
                 "music": self.music.get_status(),
                 "google": self.google_account.public(),
                 "motion": m_status,
@@ -249,6 +386,19 @@ class ReachyGeminiDJ(ReachyMiniApp):
             d = data.model_dump(exclude_unset=True)
             if d.get("brain_url") and not str(d["brain_url"]).strip().lower().startswith(("ws://", "wss://")):
                 return {"ok": False, "error": "Brain URL must start with ws:// or wss://"}
+            if d.get("frc_event") is not None:
+                d["frc_event"] = re.sub(r"\s+", "", str(d["frc_event"])).lower()
+                if d["frc_event"] and not re.fullmatch(r"[a-z0-9]{4,}", d["frc_event"]):
+                    return {"ok": False, "error": "Event code looks like 2026mndu (letters and digits only)"}
+            if d.get("frc_team") is not None:
+                d["frc_team"] = re.sub(r"\D", "", str(d["frc_team"]))
+            if d.get("brain_url") is not None and str(d["brain_url"]).strip() != (self.config.brain_url or "").strip():
+                # memory facts and your notes go to whichever brain this points at: make every change visible
+                self.record_event("security", f"Brain URL changed to {str(d['brain_url']).strip()}")
+            if d.get("listen_mode") is not None and d["listen_mode"] not in LISTEN_MODES:
+                return {"ok": False, "error": "listen_mode must be one of: " + ", ".join(LISTEN_MODES)}
+            if d.get("timezone") is not None and not set_timezone(str(d["timezone"]).strip()):
+                return {"ok": False, "error": "Unknown time zone"}
             if d.get("music_volume") is not None:
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:
@@ -258,6 +408,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
+            self.music.autoplay = bool(self.config.music_autoplay)
             if d.get("hw_speaker_percent") is not None:
                 set_hw_speaker_level(self.config.hw_speaker_percent)
             if (VOICE_KEYS | FRC_KEYS) & d.keys():
@@ -266,10 +417,43 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         @app.post("/api/mute")
         def set_mute(data: MuteUpdate):
-            self.muted = data.muted
-            if self.audio_pipe:
-                self.audio_pipe.set_mute(self.muted)
+            self._set_muted(data.muted)
+            if not data.muted:
+                self.quiet.wake(say=False, reason="unmuted")
             return {"ok": True, "muted": self.muted}
+
+        # Quiet mode: POST /api/quiet {"minutes": 30} (1-480) mutes the mic and rests the head until the time is up;
+        # POST /api/quiet/wake ends it early. Also the voice tool quiet_mode and pressing talk. See GET /api/state "quiet".
+        @app.post("/api/quiet")
+        def quiet_start(req: QuietRequest):
+            return {"ok": True, **self.quiet.enter(req.minutes), "quiet": self.quiet.status()}
+
+        @app.post("/api/quiet/wake")
+        def quiet_wake():
+            woke = self.quiet.wake(reason="page")
+            return {"ok": True, "woke": woke, "quiet": self.quiet.status()}
+
+        # Push-to-talk. This is the whole API a physical button needs (ESP32 over Wi-Fi/BLE bridge, USB foot pedal or
+        # presenter clicker via a tiny script, ...); no auth, so it is only as private as the robot's network:
+        #   POST /api/ptt         {"down": true}   press   (start sending the mic; barge-in if Reachy is talking)
+        #   POST /api/ptt         {"down": false}  release (~0.9 s of silence is sent so the utterance ends promptly)
+        #   POST /api/ptt/toggle  (no body)        tap to start, tap again to stop, for one-button devices
+        # Reply: {"ok": true, "listen_mode": "...", "ptt_active": bool}. Holding for more than 30 s auto-releases.
+        # In listen_mode "always" a press only does the barge-in / talk-pressed hooks; the mic is untouched.
+        # GET /api/state shows "listen_mode" and "ptt_active". Set the mode with POST /api/config {"listen_mode": ...}.
+        @app.post("/api/ptt")
+        def ptt(req: PttRequest):
+            if not self.audio_pipe:
+                return {"ok": False, "error": "Audio not ready", "ptt_active": False}
+            active = self.audio_pipe.ptt_set(req.down)
+            return {"ok": True, "listen_mode": self.audio_pipe.listen_mode, "ptt_active": active}
+
+        @app.post("/api/ptt/toggle")
+        def ptt_toggle():
+            if not self.audio_pipe:
+                return {"ok": False, "error": "Audio not ready", "ptt_active": False}
+            active = self.audio_pipe.ptt_toggle()
+            return {"ok": True, "listen_mode": self.audio_pipe.listen_mode, "ptt_active": active}
 
         @app.post("/api/new_conversation")
         def new_conversation():
@@ -279,12 +463,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {"ok": True}
 
         # Music endpoints
-        class MusicPlayRequest(BaseModel):
-            query: str
-
         @app.post("/api/music/play")
         def music_play(req: MusicPlayRequest):
-            return self.music.play(req.query)
+            return self.music.play(req.query, added_by="controller")
 
         @app.post("/api/music/pause")
         def music_pause():
@@ -301,6 +482,33 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.post("/api/music/stop")
         def music_stop():
             return self.music.stop()
+
+        # Queue / favorites / seek (music_queue.js)
+        @app.post("/api/music/queue")
+        def music_queue(req: MusicQueueRequest):
+            if req.action == "remove" and req.id is not None:
+                res = self.music.remove_item(req.id)
+            elif req.action == "play_next" and req.id is not None:
+                res = self.music.move_next(req.id)
+            else:
+                res = self.music.queue_action(req.action, req.which)
+            if req.action.startswith("autoplay"):
+                self.config.music_autoplay = self.music.autoplay
+                self.config.save()
+            return res
+
+        @app.post("/api/music/favorite")
+        def music_favorite(req: MusicFavoriteRequest):
+            return self.music.favorite(req.action, req.id)
+
+        @app.get("/api/music/favorites")
+        def music_favorites():
+            from . import favorites
+            return {"favorites": favorites.load()}
+
+        @app.post("/api/music/seek")
+        def music_seek(req: MusicSeekRequest):
+            return self.music.seek(req.to)
 
         # Robot endpoints
         @app.get("/api/robot/moves")
@@ -327,6 +535,15 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 return {"ok": True, "result": res}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
+
+        @app.post("/api/timers/cancel")
+        def timers_cancel(req: TimerCancel):
+            res = self.timers.cancel_id(req.id)
+            return {"ok": "error" not in res, **res}
+
+        @app.post("/api/timers/stop")
+        def timers_stop():
+            return {"ok": True, **self.timers.stop_alarm()}
 
         @app.post("/api/frc/scan")
         def frc_scan():
@@ -381,6 +598,29 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception as e:
                 return {"ok": False, "error": str(e)}
 
+        # Memory: shown and edited on the controller page. Edits made here reach the local brain through a
+        # reconnect once the robot is idle (see _memory_changed); voice edits do not, the conversation has them.
+        @app.get("/api/memory")
+        def get_memory():
+            return {"ok": True, "facts": self.memory.listing(), "max": MAX_FACTS, "max_chars": MAX_CHARS}
+
+        @app.post("/api/memory")
+        def add_memory(req: MemoryAdd):
+            r = self.memory.add(req.text)
+            if r["status"] in ("added", "updated"):
+                self._memory_changed()
+            err = {"empty": "Type something to remember.",
+                   "full": f"Memory is full ({MAX_FACTS}); delete something first."}.get(r["status"])
+            return {"ok": err is None, "status": r["status"], **({"error": err} if err else {}),
+                    "facts": self.memory.listing()}
+
+        @app.post("/api/memory/delete")
+        def delete_memory(req: MemoryDelete):
+            ok = self.memory.delete_id(req.id)
+            if ok:
+                self._memory_changed()
+            return {"ok": ok, "facts": self.memory.listing(), **({} if ok else {"error": "No such memory"})}
+
         # Google endpoints
         @app.post("/api/google/client")
         def set_google_client(req: GoogleClientUpdate):
@@ -413,13 +653,42 @@ class ReachyGeminiDJ(ReachyMiniApp):
             self.voice.init_client()
             return {"ok": True}
 
+    def _memory_changed(self) -> None:
+        """The page changed the facts: the local brain only learns them in the hello, so reconnect it - but never
+        in the middle of a conversation. Waits (in a background thread, up to 10 minutes) until the robot is idle.
+        Gemini Live reads the facts when it next connects; it is not interrupted. Not used for voice edits."""
+        with self._memory_sync_lock:
+            if self._memory_sync_pending:
+                return
+            self._memory_sync_pending = True
+
+        def work() -> None:
+            def done() -> None:
+                with self._memory_sync_lock:
+                    self._memory_sync_pending = False       # a later edit schedules a fresh reconnect
+
+            try:
+                deadline = time.monotonic() + 600
+                while time.monotonic() < deadline:
+                    if self.voice.active_name != "local":
+                        return
+                    if self.voice.is_idle():
+                        done()
+                        self.voice.init_client()
+                        return
+                    time.sleep(1.0)
+            finally:
+                done()
+
+        threading.Thread(target=work, daemon=True, name="memory-sync").start()
+
     def _tool_specs(self) -> list[dict]:
         """Tools offered to the local brain: only those that can work (each one costs prompt tokens to read)."""
         return robot_tool_specs(google_services=set(self.google_account.granted()) if self.google_account.connected else set(),
                                 frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.5.1...")
+        log.info("Starting Reachy Gemini DJ v0.6.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot
@@ -439,16 +708,22 @@ class ReachyGeminiDJ(ReachyMiniApp):
             music=self.music,
             on_level=lambda lvl: setattr(self, "mic_level", lvl),
             on_pcm_chunk=self.voice.push_mic,
+            on_talk_pressed=self._on_talk_pressed,
         )
 
         # Start background pipelines
         self.audio_pipe.start()
         self.voice.start()
         self.frc.start()
+        self.timers.motion = self.motion
+        self.timers.start()
+        self.quiet.motion = self.motion
+        self.quiet.start()
+        self.imu.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
-            if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing:
+            if self.config.expressive and self.config.motion_enabled and self.motion and not self.motion.busy and not self.music.is_playing and not self.quiet.active:
                 time.sleep(12.0)
                 if not self.motion.busy and not stop_event.is_set():
                     try:
@@ -465,6 +740,9 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception:
                 pass
         self.frc.stop()
+        self.timers.stop()
+        self.quiet.stop()
+        self.imu.stop()
         self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()

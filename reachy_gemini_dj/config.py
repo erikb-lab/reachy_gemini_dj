@@ -20,6 +20,7 @@ class Config:
     voice: str = "Puck"
     extra_instructions: str = ""
     music_volume: float = 2.00  # linear gain 0.0-2.5 (1.0 = unity, 2.0 = 200%); see gain.py
+    music_autoplay: bool = True   # keep the music going with related tracks when the queue runs dry
     duck_level: float = 0.20  # fraction 0.0-1.0 of music_volume while someone talks
     voice_gain: float = 1.50
     hw_speaker_percent: int = 100   # speaker chip's own level, set at start (the robot ships at 72% = -17 dB); 0 = leave alone
@@ -39,6 +40,11 @@ class Config:
     tba_api_key: str = ""
     nexus_link: str = ""          # private team link from the Nexus QR; never shown or sent anywhere
     frc_alerts: bool = True
+    # How the mic is used: "always" = always listening; "push_to_talk" = only while talk is held (loud events)
+    listen_mode: str = "always"
+    greet_on_start: bool = True   # say "I'm ready." once when the voice backend first becomes ready after app start
+    imu_reactions: bool = True    # speak / react when picked up, set down, bumped, shaken or tipped over (imu.py)
+    timezone: str = ""            # IANA zone for alarms, e.g. "America/Chicago"; filled from the controller page
 
     @property
     def effective_model(self) -> str:
@@ -56,6 +62,7 @@ class Config:
         data = asdict(self)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.chmod(tmp, 0o600)          # holds API keys and the private Nexus link: owner-only
         os.replace(tmp, CONFIG_FILE)
 
     @classmethod
