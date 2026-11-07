@@ -38,44 +38,40 @@
     if (!panel || document.getElementById('eq-card')) return !!panel;
     var card = el('section', 'card');
     card.id = 'eq-card';
-    card.style.marginTop = '16px';
     card.setAttribute('aria-labelledby', 'h-eq');
     var h = el('h2', null, 'Music EQ'); h.id = 'h-eq';
     card.appendChild(h);
     card.appendChild(el('p', 'sub', 'Applies to the current song after a short restart and to every song after.'));
 
     BANDS.forEach(function (b) {
-      var row = el('div', 'row');
-      row.style.alignItems = 'center';
-      row.style.gap = '12px';
+      var field = el('div', 'sp-field');
       var lab = el('label', null, b[1]);
-      lab.style.minWidth = '56px';
       var inp = document.createElement('input');
       inp.type = 'range'; inp.min = -12; inp.max = 12; inp.step = 1; inp.value = 0;
       inp.id = 'eq-' + b[0];
-      inp.style.flex = '1';
-      inp.style.accentColor = 'var(--accent)';
       lab.htmlFor = inp.id;
       var out = el('output', null, fmt(0));
-      out.style.minWidth = '54px'; out.style.textAlign = 'right';
       inp.addEventListener('input', function () { dragging = b[0]; out.textContent = fmt(+inp.value); });
       inp.addEventListener('change', function () { save(values()); dragging = null; });
       sliders[b[0]] = inp; outs[b[0]] = out;
-      row.appendChild(lab); row.appendChild(inp); row.appendChild(out);
-      card.appendChild(row);
+      var rng = el('div', 'sp-range');
+      rng.appendChild(inp); rng.appendChild(out);
+      field.appendChild(lab); field.appendChild(rng);
+      card.appendChild(field);
     });
 
-    var pr = el('div', 'row');
-    pr.style.flexWrap = 'wrap'; pr.style.gap = '8px'; pr.style.marginTop = '10px';
+    card.appendChild(el('h3', null, 'Presets'));
+    var pr = el('div', 'eq-presets');
+    pr.setAttribute('role', 'group');
+    pr.setAttribute('aria-label', 'EQ presets');
     PRESETS.forEach(function (p) {
-      var btn = el('button', 'btn ghost', p[0]);
+      var btn = el('button', 'btn ghost eq-pill', p[0]);
       btn.type = 'button';
       btn.addEventListener('click', function () { setAll(p[1]); save(p[1]); });
       pr.appendChild(btn);
     });
-    var reset = el('button', 'btn ghost', 'Reset');
+    var reset = el('button', 'btn ghost eq-pill eq-reset', 'Reset');
     reset.type = 'button';
-    reset.style.borderColor = 'var(--line)';
     reset.addEventListener('click', function () { setAll([0, 0, 0]); save([0, 0, 0]); });
     pr.appendChild(reset);
     card.appendChild(pr);

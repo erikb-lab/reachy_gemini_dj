@@ -82,11 +82,11 @@
     root.textContent = '';
 
     // --- Gemini ---
-    var c1 = h('div', { class: 'pn-card' }, [h('h2', { text: 'Gemini' })]);
+    var c1 = h('div', { class: 'pn-card', id: 'sc-gemini' }, [h('h2', { text: 'Gemini' })]);
     var keyIn = h('input', { class: 'sp-input', id: 'sp-api_key', type: 'password', autocomplete: 'new-password',
       placeholder: 'Paste a new key to replace the stored one', spellcheck: 'false' });
     var keyBtn = h('button', { type: 'button', class: 'pn-btn primary', text: 'Save key' });
-    keyState = h('span', { class: 'hint', text: 'checking…' });
+    keyState = h('span', { class: 'kstate', text: 'checking…' });
     function saveKey() {
       var v = keyIn.value.trim();
       if (!v) { toast('Paste a key first', true); return; }
@@ -115,12 +115,11 @@
     root.appendChild(c1);
 
     // --- Sound ---
-    var c2 = h('div', { class: 'pn-card' }, [h('h2', { text: 'Sound & interaction' })]);
+    var c2 = h('div', { class: 'pn-card', id: 'sc-sound' }, [h('h2', { text: 'Sound & interaction' })]);
     c2.appendChild(rangeField('music_volume', 'Music volume', 'Loudness of played music', 0, 2.5, 0.05, FMT.pct));
     c2.appendChild(rangeField('duck_level', 'Duck level', 'Music volume while someone is talking', 0, 1, 0.01, FMT.pct));
     c2.appendChild(rangeField('voice_gain', 'Voice loudness', 'Gain applied to Reachy’s voice', 0.2, 2.5, 0.05, FMT.x));
     c2.appendChild(rangeField('echo_guard', 'Echo guard', 'Raise if music interrupts Reachy; lower if it ignores you', 0.5, 5, 0.1, FMT.n1));
-    c2.appendChild(switchRow('web_search', 'Web search in Gemini mode', 'Lets Gemini look things up. The local brain always has free web search and weather.', true));
     var lm = h('select', { id: 'sp-listen_mode' });
     [['always', 'Always listening'], ['push_to_talk', 'Push to talk (loud venues)']].forEach(function (o) {
       lm.appendChild(h('option', { value: o[0], text: o[1] }));
@@ -128,12 +127,13 @@
     lm.addEventListener('change', function () { save('listen_mode', function () { return lm.value; }, 150, 'Listening mode'); });
     fields.listen_mode = { el: lm, set: function (v) { lm.value = v || 'always'; } };
     c2.appendChild(field('sp-listen_mode', 'Listening', 'Push to talk: Reachy only hears you while you hold the talk button (or Space) on the DJ tab', lm));
+    c2.appendChild(switchRow('web_search', 'Web search in Gemini mode', 'Lets Gemini look things up. The local brain always has free web search and weather.', true));
     c2.appendChild(switchRow('greet_on_start', 'Say “I’m ready” at start', 'Reachy says it once when it can listen after the app starts (the first warm-up can take a couple of minutes).', false));
     c2.appendChild(switchRow('imu_reactions', 'React when picked up or bumped', 'Reachy says a short line when it is picked up, set down, bumped, shaken or tipped over (uses its motion sensor).', false));
     root.appendChild(c2);
 
     // --- Backend ---
-    var c3 = h('div', { class: 'pn-card' }, [h('h2', { text: 'Voice backend' })]);
+    var c3 = h('div', { class: 'pn-card', id: 'sc-backend' }, [h('h2', { text: 'Voice backend' })]);
     var be = h('select', { id: 'sp-backend' });
     [['auto', 'Auto (local when available, else Gemini)'], ['local', 'Local only'], ['gemini', 'Gemini only']].forEach(function (o) {
       be.appendChild(h('option', { value: o[0], text: o[1] }));
@@ -150,7 +150,7 @@
     root.appendChild(c3);
 
     // --- FRC (FIRST Robotics): Nexus QR scan, queuing alerts, Blue Alliance ---
-    var c4 = h('div', { class: 'pn-card' }, [h('h2', { text: 'FRC robotics' })]);
+    var c4 = h('div', { class: 'pn-card', id: 'sc-frc' }, [h('h2', { text: 'FRC robotics' })]);
     var scanBtn = h('button', { type: 'button', class: 'pn-btn primary', text: 'Scan QR code' });
     var scanMsg = h('span', { class: 'hint', 'aria-live': 'polite', text: 'Hold your team\u2019s Nexus code up to Reachy\u2019s camera.' });
     scanBtn.addEventListener('click', function () {
@@ -161,7 +161,7 @@
       }).catch(function (e) { scanMsg.textContent = 'Scan failed: ' + e.message; })
         .then(function () { scanBtn.disabled = false; });
     });
-    c4.appendChild(h('div', { class: 'sp-field' }, [h('div', { class: 'sp-row' }, [scanBtn]), scanMsg]));
+    c4.appendChild(h('div', { class: 'sp-field sp-scan' }, [h('div', { class: 'sp-row' }, [scanBtn]), scanMsg]));
     c4.appendChild(textField('frc_team', 'Team number', 'Filled in by the Nexus QR code', { placeholder: 'e.g. 1234' }));
     c4.appendChild(textField('frc_event', 'Event code', 'Blue Alliance / Nexus event key', { placeholder: 'e.g. 2026mokc' }));
     c4.appendChild(secretField('nexus_api_key', 'nexus_key_set', 'Nexus API key', 'Live queuing. Get one at frc.nexus/api'));
@@ -182,8 +182,8 @@
   function secretField(key, setKey, label, hint) {
     var inp = h('input', { class: 'sp-input', id: 'sp-' + key, type: 'password', autocomplete: 'new-password',
       spellcheck: 'false', placeholder: 'Paste a key to replace the stored one' });
-    var btn = h('button', { type: 'button', class: 'pn-btn primary', text: 'Save' });
-    var st = h('span', { class: 'hint', text: '' });
+    var btn = h('button', { type: 'button', class: 'pn-btn', text: 'Save' });
+    var st = h('span', { class: 'kstate', text: '' });
     secretStates[setKey] = st;
     function go() {
       var v = inp.value.trim();
