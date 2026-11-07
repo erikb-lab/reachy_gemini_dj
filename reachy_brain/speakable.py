@@ -65,8 +65,20 @@ def _ordinal(n: int) -> str:
     return (head + " " if _ and head else "") + base
 
 
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{int_words(n)} {one if n == 1 else many}"
+
+
 def speakable(text: str) -> str:
     t = text
+    # win-loss-tie records: "9-1-0" -> "nine wins, one loss, zero ties" (said as digits it is heard as "910")
+    t = re.sub(r"\b(\d{1,3})-(\d{1,3})-(\d{1,3})\b",
+               lambda m: f"{_plural(int(m.group(1)), 'win', 'wins')}, {_plural(int(m.group(2)), 'loss', 'losses')}, "
+                         f"{_plural(int(m.group(3)), 'tie', 'ties')}", t)
+    # scores: "won 120-98" -> "won by a score of one hundred twenty to ninety eight" (a run of number words right
+    # after a team number gets slurred otherwise); a bare "120-98" -> "one hundred twenty to ninety eight"
+    t = re.sub(r"(?i)\b(won|lost|tied)\s+(?=\d{1,3}-\d{1,3}\b)", r"\1 by a score of ", t)
+    t = re.sub(r"\b(\d{1,3})-(\d{1,3})\b", lambda m: f"{int_words(int(m.group(1)))} to {int_words(int(m.group(2)))}", t)
     t = re.sub(r"(\d{1,2}):(\d{2})\s*([ap])\.?m\.?", lambda m: _clock(m.group(1), m.group(2)) + (" a m" if m.group(3).lower() == "a" else " p m"), t, flags=re.I)
     t = re.sub(r"\b(\d{1,2}):(\d{2})\b", lambda m: _clock(m.group(1), m.group(2)), t)
     t = re.sub(r"\b(\d+)(?:st|nd|rd|th)\b", lambda m: _ordinal(int(m.group(1))), t)
@@ -75,6 +87,9 @@ def speakable(text: str) -> str:
     t = re.sub(r"(\d+)\.(\d+)", lambda m: int_words(int(m.group(1))) + " point " + " ".join(_ONES[int(d)] for d in m.group(2)), t)
     t = re.sub(r"(?i)\b(teams?|frc)(\s+)(\d{1,5}(?:(?:,\s*(?:and\s+)?|\s+and\s+)\d{1,5})*)\b",
                lambda m: m.group(1) + m.group(2) + re.sub(r"\d+", lambda d: _team(d.group(0)), m.group(3)), t)
+    # "team one six seven eight won ..." is heard as "...eight one": "has won" keeps the number and the word apart
+    t = re.sub(r"(?i)\b((?:teams?|frc)\s+(?:(?:zero|one|two|three|four|five|six|seven|eight|nine)\s+)+)won\b",
+               r"\1has won", t)
     t = re.sub(r"\d+", lambda m: _number(m.group(0)), t)
     return t
 

@@ -27,3 +27,15 @@ def test_team_style_only_after_the_word_team():
     assert speakable("pit 1234") == "pit one thousand two hundred thirty four"
     assert speakable("teams 254 and 1678") == "teams two five four and one six seven eight"
     assert speakable("Team 254 beat 118") == "Team two five four beat one hundred eighteen"
+
+
+def test_records_and_scores():
+    assert speakable("a record of 9-1-0") == "a record of nine wins, one loss, zero ties"
+    assert speakable("went 1-2-1") == "went one win, two losses, one tie"
+    assert speakable("won 120-98") == "won by a score of one hundred twenty to ninety eight"
+    assert speakable("final 120-98") == "final one hundred twenty to ninety eight"
+
+
+def test_won_after_a_team_number_is_kept_apart():
+    assert speakable("Team 1678 won in 2025.") == "Team one six seven eight has won in twenty twenty five."
+    assert speakable("They won 120-98.") == "They won by a score of one hundred twenty to ninety eight."
