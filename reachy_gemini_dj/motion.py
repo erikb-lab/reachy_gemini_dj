@@ -70,9 +70,13 @@ THINK_TILT_S = 1.4        # slow on purpose
 DRIVE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw", "body", "ant_l", "ant_r")
 DRIVE_LIMITS = {"x": (-15.0, 15.0), "y": (-15.0, 15.0), "z": (-15.0, 20.0),
                 "roll": (-25.0, 25.0), "pitch": (-30.0, 30.0), "yaw": (-60.0, 60.0),
-                "body": (-150.0, 150.0), "ant_l": (-120.0, 120.0), "ant_r": (-120.0, 120.0)}
+                "body": (-150.0, 150.0),
+                # Antennas are asymmetric: across Pollen's recorded emotions and dances the left one stays within
+                # -60..+194 deg and the right one within -182..+60 deg. Past those it can hit a stop and the motor
+                # shuts itself off with an overload error, so stay well inside.
+                "ant_l": (-45.0, 150.0), "ant_r": (-150.0, 45.0)}
 DRIVE_SPEED = {"x": 60.0, "y": 60.0, "z": 60.0, "roll": 120.0, "pitch": 120.0, "yaw": 120.0,
-               "body": 90.0, "ant_l": 300.0, "ant_r": 300.0}   # max change per second
+               "body": 90.0, "ant_l": 120.0, "ant_r": 120.0}   # max change per second
 DRIVE_HZ = 50.0
 DRIVE_IDLE_S = 180.0      # no input for this long: leave manual mode (the robot keeps holding the pose)
 
@@ -439,7 +443,7 @@ class Motion:
         return real
 
     # ------------------------------------------------------------- gamepad drive ---
-    def _read_drive_pose(self) -> dict:
+    def _read_drive_pose(self, clamp: bool = True) -> dict:
         """The robot's present pose in drive units (falls back to neutral if it cannot be read)."""
         pose = {k: 0.0 for k in DRIVE_KEYS}
         try:
@@ -455,7 +459,7 @@ class Motion:
                 pose["ant_r"], pose["ant_l"] = math.degrees(float(antennas[0])), math.degrees(float(antennas[1]))
         except Exception as e:
             log.warning("could not read the pose for gamepad mode: %s", e)
-        return drive_clamp(pose)
+        return drive_clamp(pose) if clamp else pose
 
     def drive_start(self) -> dict:
         """Gamepad mode on: motors on, other moves paused, start from where the robot is now."""
@@ -471,10 +475,10 @@ class Motion:
         while self.busy and time.monotonic() < deadline:
             time.sleep(0.05)
         self._ensure_motors()
-        pose = self._read_drive_pose()
+        pose = self._read_drive_pose(clamp=False)
         with self._lock:
-            self._drive_cmd = dict(pose)
-            self._drive_want = dict(pose)
+            self._drive_cmd = dict(pose)               # where it really is (may be outside the safe range)...
+            self._drive_want = drive_clamp(pose)       # ...walked back inside at the capped speed, never jumped
             self._drive_seen = time.monotonic()
             self._thinking = self._tilted = False
             self.manual = True

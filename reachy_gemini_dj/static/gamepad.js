@@ -2,20 +2,67 @@
    The controller pairs over Bluetooth (or USB) with the phone or computer showing this page; the browser's Gamepad
    API reads it, and this script streams a target pose to POST /api/drive/target. The robot walks the motors towards
    the target at a capped speed (motion.py), so a lost packet or a "centre" press never makes it jump.
-   Vanilla JS, no dependencies. */
+
+   Every control can be remapped: tap a control in the table, then press a button or move a stick or trigger.
+   Analog inputs stay analog (sticks and L2/R2 triggers give proportional speed). The mapping is remembered per
+   controller in this browser. Vanilla JS, no dependencies. */
 (function () {
   'use strict';
   var DEAD = 0.15;                       // stick dead zone
-  var RATE = { yaw: 90, pitch: 70, roll: 60, z: 30, x: 30, body: 90, ant: 180 };   // per second at full deflection
+  var TRIG_DEAD = 0.05;                  // trigger / button dead zone
   var FINE = 0.3;                        // fine mode speed factor
   var SEND_MS = 60;
-  var TICK_MS = 25;                     // controller poll interval (a timer: animation frames can stall in embedded views)
+  var TICK_MS = 25;                      // controller poll interval (a timer: animation frames can stall in embedded views)
   var LIMITS = { x: [-15, 15], y: [-15, 15], z: [-15, 20], roll: [-25, 25], pitch: [-30, 30], yaw: [-60, 60],
-                 body: [-150, 150], ant_l: [-120, 120], ant_r: [-120, 120] };
+                 body: [-150, 150], ant_l: [-45, 150], ant_r: [-150, 45] };   // same as motion.py
   var KEYS = ['x', 'y', 'z', 'roll', 'pitch', 'yaw', 'body', 'ant_l', 'ant_r'];
+  var STORE = 'reachy-gamepad-map:';
+
+  /* Analog actions. plus/minus are the two directions (from Reachy's point of view). keys: which pose values move,
+     with a sign per key (yaw and body are + to the left, pitch is + down, so "right" and "up" are negative). */
+  var ANALOG = [
+    { id: 'look_h', name: 'Look', plus: 'right', minus: 'left', rate: 90, keys: { yaw: -1 } },
+    { id: 'look_v', name: 'Look', plus: 'up', minus: 'down', rate: 70, keys: { pitch: -1 } },
+    { id: 'body', name: 'Turn body', plus: 'right', minus: 'left', rate: 90, keys: { body: -1 } },
+    { id: 'height', name: 'Head height', plus: 'up', minus: 'down', rate: 30, keys: { z: 1 } },
+    { id: 'lean', name: 'Lean head', plus: 'forward', minus: 'back', rate: 30, keys: { x: 1 } },
+    { id: 'tilt', name: 'Tilt head', plus: 'right', minus: 'left', rate: 60, keys: { roll: 1 } },
+    { id: 'slide', name: 'Slide head', plus: 'left', minus: 'right', rate: 30, keys: { y: 1 } },
+    { id: 'ant', name: 'Both antennas', plus: 'one way', minus: 'other way', rate: 90, keys: { ant_l: 1, ant_r: 1 } },
+    { id: 'ant_opp', name: 'Antennas opposite', plus: 'one way', minus: 'other way', rate: 90, keys: { ant_l: 1, ant_r: -1 } },
+    { id: 'ant_l', name: 'Left antenna', plus: 'one way', minus: 'other way', rate: 90, keys: { ant_l: 1 } },
+    { id: 'ant_r', name: 'Right antenna', plus: 'one way', minus: 'other way', rate: 90, keys: { ant_r: 1 } }
+  ];
+  var BUTTONS = [
+    { id: 'toggle', name: 'Gamepad mode on / off' },
+    { id: 'save', name: 'Save pose' },
+    { id: 'centre', name: 'Centre everything' },
+    { id: 'straight', name: 'Head straight' },
+    { id: 'fine', name: 'Fine control on / off' }
+  ];
+  /* Inputs: {a: axis, d: +1/-1} centred stick axis; {t: axis} trigger reported as an axis resting at -1;
+     {b: button} button (its value is analog for L2/R2 in the standard layout). Defaults = standard layout
+     (DualShock 4 / DualSense / Xbox in Chrome, Edge, Safari): sticks look and turn, L2/R2 lean, L1/R1 tilt,
+     D-pad antennas, Cross save, Circle centre, Square straight, Triangle fine, Options on/off. */
+  var DEFAULTS = {
+    look_h: { plus: { a: 0, d: 1 } }, look_v: { plus: { a: 1, d: -1 } },
+    body: { plus: { a: 2, d: 1 } }, height: { plus: { a: 3, d: -1 } },
+    lean: { plus: { b: 7 }, minus: { b: 6 } }, tilt: { plus: { b: 5 }, minus: { b: 4 } },
+    ant: { plus: { b: 12 }, minus: { b: 13 } }, ant_opp: { plus: { b: 15 }, minus: { b: 14 } },
+    toggle: { b: 9 }, save: { b: 0 }, centre: { b: 1 }, straight: { b: 2 }, fine: { b: 3 }
+  };
+  var NAMES = {
+    ps: ['✕ Cross', '○ Circle', '□ Square', '△ Triangle', 'L1', 'R1', 'L2', 'R2', 'Share', 'Options', 'L3', 'R3',
+         'D-pad ↑', 'D-pad ↓', 'D-pad ←', 'D-pad →', 'PS', 'Touchpad'],
+    xbox: ['A', 'B', 'X', 'Y', 'LB', 'RB', 'LT', 'RT', 'View', 'Menu', 'LS', 'RS',
+           'D-pad ↑', 'D-pad ↓', 'D-pad ←', 'D-pad →', 'Xbox'],
+    nin: ['B', 'A', 'Y', 'X', 'L', 'R', 'ZL', 'ZR', '−', '+', 'LS', 'RS', 'D-pad ↑', 'D-pad ↓', 'D-pad ←', 'D-pad →', 'Home', 'Capture']
+  };
+  var STICKS = [['Left stick', '→', '←'], ['Left stick', '↓', '↑'], ['Right stick', '→', '←'], ['Right stick', '↓', '↑']];
 
   var on = false, busy = false, fine = false, target = null, lastSent = '', lastSendT = 0, lastFrame = 0;
-  var prevButtons = [], padIndex = null, raf = 0;
+  var prevButtons = [], padIndex = null, timer = 0, map = null, mapFor = '';
+  var capture = null;                    // {kind:'analog'|'button', id, slot, base:{axes, buttons}, until}
   var els = {};
 
   function h(tag, attrs, kids) {
@@ -41,13 +88,65 @@
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
   function clamp(k, v) { var l = LIMITS[k]; return Math.min(l[1], Math.max(l[0], v)); }
-  function dz(v) { if (Math.abs(v) < DEAD) return 0; return (v - Math.sign(v) * DEAD) / (1 - DEAD); }
+  function dz(v, d) { if (Math.abs(v) < d) return 0; return (v - Math.sign(v) * d) / (1 - d); }
+  function copy(o) { return JSON.parse(JSON.stringify(o)); }
 
   function pad() {
     var list = navigator.getGamepads ? navigator.getGamepads() : [];
     if (padIndex != null && list[padIndex]) return list[padIndex];
     for (var i = 0; i < list.length; i++) if (list[i] && list[i].connected) { padIndex = i; return list[i]; }
     return null;
+  }
+  function family(p) {
+    if (!p || p.mapping !== 'standard') return '';
+    var id = p.id || '';
+    if (/054c|dualshock|dualsense|playstation|wireless controller/i.test(id)) return 'ps';
+    if (/057e|nintendo|pro controller|joy-con/i.test(id)) return 'nin';
+    return 'xbox';
+  }
+  function shortId(p) { return p ? p.id.replace(/\s*\(.*\)\s*$/, '').slice(0, 60) : ''; }
+
+  /* ---------------- mapping storage ---------------- */
+  function loadMap(p) {
+    var key = p ? shortId(p) : '';
+    if (map && mapFor === key) return map;
+    mapFor = key; map = copy(DEFAULTS);
+    try {
+      var raw = localStorage.getItem(STORE + key);
+      if (raw) { var saved = JSON.parse(raw); if (saved && typeof saved === 'object') map = Object.assign(copy(DEFAULTS), saved); }
+    } catch (e) { /* storage blocked: defaults */ }
+    return map;
+  }
+  function saveMap() {
+    try { localStorage.setItem(STORE + mapFor, JSON.stringify(map)); } catch (e) { /* not remembered */ }
+  }
+
+  /* ---------------- reading inputs ---------------- */
+  function inputValue(inp, p) {
+    if (!inp || !p) return 0;
+    var a = p.axes || [], b = p.buttons || [];
+    if (inp.a != null) return dz((a[inp.a] || 0) * (inp.d || 1), DEAD);                 // -1..1
+    if (inp.t != null) return Math.max(0, dz(((a[inp.t] == null ? -1 : a[inp.t]) + 1) / 2, TRIG_DEAD));  // 0..1
+    if (inp.b != null) { var x = b[inp.b]; return x ? Math.max(0, dz(x.value || (x.pressed ? 1 : 0), TRIG_DEAD)) : 0; }
+    return 0;
+  }
+  function analog(id, p) {
+    var m = map[id] || {};
+    return Math.max(-1, Math.min(1, inputValue(m.plus, p) - inputValue(m.minus, p)));
+  }
+  function buttonDown(id, p) {
+    return inputValue(map[id], p) > 0.5;
+  }
+  function label(inp, p) {
+    if (!inp) return '—';
+    var fam = family(p);
+    if (inp.a != null) {
+      var s = fam && STICKS[inp.a];
+      return s ? s[0] + ' ' + (inp.d > 0 ? s[1] : s[2]) : 'Axis ' + inp.a + (inp.d > 0 ? ' +' : ' −');
+    }
+    if (inp.t != null) return 'Axis ' + inp.t + ' (trigger)';
+    if (inp.b != null) return (fam && NAMES[fam][inp.b]) || 'Button ' + inp.b;
+    return '—';
   }
 
   /* ---------------- UI ---------------- */
@@ -64,21 +163,30 @@
     card.appendChild(h('div', { class: 'gp-row' }, [els.btn, els.fine, els.center]));
     els.read = h('dl', { class: 'gp-read', 'aria-live': 'off' });
     card.appendChild(els.read);
-    card.appendChild(h('details', { class: 'gp-help' }, [
-      h('summary', { text: 'Controls' }),
-      h('ul', {}, [
-        h('li', { text: 'Left stick: look left/right and up/down' }),
-        h('li', { text: 'Right stick: turn the body, raise/lower the head' }),
-        h('li', { text: 'LB / RB: tilt the head' }),
-        h('li', { text: 'LT / RT: lean the head back / forward' }),
-        h('li', { text: 'D-pad up/down: both antennas; left/right: antennas opposite ways' }),
-        h('li', { text: 'A: save pose · B: centre everything · X: head straight · Y: fine / fast' }),
-        h('li', { text: 'Start: gamepad mode on / off' })
-      ]),
-      h('p', { class: 'pn-muted', text: 'Pair the controller (Xbox, PlayStation, Switch Pro, 8BitDo…) with this phone or computer in its ' +
-        'own Bluetooth settings, then press any button on it so the browser can see it. Voice moves, dances and emotions ' +
-        'pause while gamepad mode is on; it turns itself off after 3 minutes without input and Reachy keeps the pose.' })
+
+    els.mapBox = h('details', { class: 'gp-help' });
+    els.mapBox.appendChild(h('summary', { text: 'Controls and button mapping' }));
+    els.capBar = h('div', { class: 'gp-cap hide', role: 'status', 'aria-live': 'polite' });
+    els.mapBox.appendChild(els.capBar);
+    els.table = h('div', { class: 'gp-map' });
+    els.mapBox.appendChild(els.table);
+    els.mapBox.appendChild(h('div', { class: 'gp-row', style: 'margin-top:10px' }, [
+      h('button', { type: 'button', class: 'pn-btn', text: 'Reset to defaults', onclick: function () {
+        if (!window.confirm('Reset all controller mappings to the defaults?')) return;
+        map = copy(DEFAULTS); saveMap(); renderMap(); toast('Mapping reset');
+      } })
     ]));
+    els.mapNote = h('p', { class: 'pn-muted' });
+    els.mapBox.appendChild(els.mapNote);
+    els.mapBox.appendChild(h('p', { class: 'pn-muted', text: 'Tap a control, then press a button or move a stick or trigger ' +
+      'in the direction you want. Sticks and L2/R2 are analog: push further to move faster. Directions are from ' +
+      'Reachy\'s point of view. The mapping is remembered in this browser for this controller.' }));
+    els.mapBox.appendChild(h('p', { class: 'pn-muted', text: 'Pair the controller with this phone or computer in its ' +
+      'own Bluetooth settings (DualShock 4: hold Share + PS until the light flashes), then press any button so the ' +
+      'browser sees it. Voice moves, dances and emotions pause while gamepad mode is on; it turns itself off after ' +
+      '3 minutes without input and Reachy keeps the pose.' }));
+    card.appendChild(els.mapBox);
+
     var poses = document.getElementById('rp-poses');
     if (poses && poses.parentNode === root) root.insertBefore(card, poses); else root.appendChild(card);
 
@@ -86,15 +194,28 @@
     css.textContent =
       '.gp-pad{display:flex;align-items:center;gap:8px;margin:0 0 12px;color:var(--p-muted)}' +
       '.gp-pad.ok{color:var(--p-fg);font-weight:600}' +
-      '.gp-row{display:flex;flex-wrap:wrap;gap:8px}.gp-row .pn-btn{text-transform:none}' +
+      '.gp-row{display:flex;flex-wrap:wrap;gap:8px}#rp-gamepad .pn-btn{text-transform:none}' +
       '#rp-gamepad .pn-btn[aria-pressed=true]{background:var(--p-accent);border-color:var(--p-accent);color:#fff}' +
       '.gp-read{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin:14px 0 4px}' +
       '.gp-read div{background:var(--p-bg);border:1px solid var(--p-border);border-radius:10px;padding:6px 10px}' +
       '.gp-read dt{color:var(--p-muted);font-size:.78rem}.gp-read dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}' +
-      '.gp-help{margin-top:12px}.gp-help summary{cursor:pointer;font-weight:600;min-height:32px}' +
-      '.gp-help ul{margin:6px 0 8px;padding-left:20px}.gp-help li{margin:3px 0}';
+      '.gp-help{margin-top:12px}.gp-help summary{cursor:pointer;font-weight:600;min-height:36px;display:flex;align-items:center}' +
+      '.gp-map{display:grid;gap:6px;margin:8px 0}' +
+      '.gp-mrow{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,1.4fr);gap:6px 10px;align-items:center;' +
+        'padding:6px 0;border-top:1px solid var(--p-border)}' +
+      '.gp-mrow:first-child{border-top:0}.gp-mname{font-weight:600}' +
+      '.gp-slots{display:flex;flex-wrap:wrap;gap:6px}' +
+      '.gp-chip{min-height:40px;padding:4px 10px;border-radius:10px;border:1px solid var(--p-border);background:var(--p-bg);' +
+        'color:var(--p-fg);font:inherit;font-size:.88rem;cursor:pointer;text-align:left}' +
+      '.gp-chip small{display:block;color:var(--p-muted);font-size:.72rem}' +
+      '.gp-chip.wait{border-color:var(--p-accent);box-shadow:0 0 0 2px var(--p-accent)}' +
+      '.gp-cap{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border-radius:10px;' +
+        'background:var(--p-bg);border:1px solid var(--p-accent);margin:8px 0;font-weight:600}' +
+      '.gp-cap .pn-btn{min-height:36px}' +
+      '@media (max-width:480px){.gp-mrow{grid-template-columns:1fr}}';
     document.head.appendChild(css);
     paint();
+    renderMap();
     return true;
   }
 
@@ -104,7 +225,9 @@
     els.pad.textContent = '';
     els.pad.className = 'gp-pad' + (p ? ' ok' : '');
     els.pad.appendChild(h('span', { class: 'pn-dot ' + (p ? 'ok' : '') }));
-    els.pad.appendChild(document.createTextNode(p ? 'Controller: ' + p.id.replace(/\s*\(.*\)\s*$/, '').slice(0, 60)
+    var fam = family(p);
+    els.pad.appendChild(document.createTextNode(p ? 'Controller: ' + shortId(p) +
+      (fam === 'ps' ? ' (PlayStation buttons)' : fam === 'nin' ? ' (Nintendo buttons)' : '')
       : 'No controller yet. Pair one with this device, then press any button on it.'));
     els.btn.textContent = on ? 'Stop gamepad mode' : 'Start gamepad mode';
     els.btn.setAttribute('aria-pressed', on ? 'true' : 'false');
@@ -127,6 +250,97 @@
     rows.forEach(function (r) { els.read.appendChild(h('div', {}, [h('dt', { text: r[0] }), h('dd', { text: r[1] })])); });
   }
   function fmt(v, unit) { return typeof v === 'number' ? Math.round(v) + unit : '–'; }
+
+  function chip(kind, id, slot, top, inp, p) {
+    var waiting = capture && capture.id === id && capture.slot === slot;
+    return h('button', { type: 'button', class: 'gp-chip' + (waiting ? ' wait' : ''),
+      'aria-label': 'Change: ' + top + ', now ' + label(inp, p),
+      onclick: function () { startCapture(kind, id, slot, top); } },
+      [h('small', { text: top }), waiting ? 'Press or move…' : label(inp, p)]);
+  }
+  function renderMap() {
+    if (!els.table) return;
+    var p = pad();
+    loadMap(p);
+    els.table.textContent = '';
+    ANALOG.forEach(function (a) {
+      var m = map[a.id] || {};
+      var slots = [chip('analog', a.id, 'plus', a.plus, m.plus, p)];
+      var plusIsStick = m.plus && m.plus.a != null;
+      if (!plusIsStick || m.minus) slots.push(chip('analog', a.id, 'minus', a.minus, m.minus, p));
+      els.table.appendChild(h('div', { class: 'gp-mrow' }, [h('span', { class: 'gp-mname', text: a.name }),
+        h('div', { class: 'gp-slots' }, slots)]));
+    });
+    BUTTONS.forEach(function (b) {
+      els.table.appendChild(h('div', { class: 'gp-mrow' }, [h('span', { class: 'gp-mname', text: b.name }),
+        h('div', { class: 'gp-slots' }, [chip('button', b.id, '', 'button', map[b.id], p)])]));
+    });
+    els.mapNote.textContent = p && p.mapping !== 'standard'
+      ? 'This browser reports a non-standard layout for this controller, so the defaults may be wrong: tap each control and set it.'
+      : '';
+    els.mapNote.className = 'pn-muted' + (els.mapNote.textContent ? ' pn-err' : '');
+  }
+
+  /* ---------------- remapping ---------------- */
+  function startCapture(kind, id, slot, top) {
+    var p = pad();
+    if (!p) { toast('Connect a controller first: press any button on it', true); return; }
+    if (capture && capture.id === id && capture.slot === slot) { endCapture(); return; }
+    capture = { kind: kind, id: id, slot: slot, until: Date.now() + 10000,
+      base: { axes: (p.axes || []).slice(), buttons: (p.buttons || []).map(function (b) { return b ? b.value || (b.pressed ? 1 : 0) : 0; }) } };
+    var act = (kind === 'analog' ? ANALOG : BUTTONS).filter(function (x) { return x.id === id; })[0];
+    els.capBar.textContent = '';
+    els.capBar.appendChild(document.createTextNode('Set ' + act.name + (kind === 'analog' ? ' (' + top + ')' : '') +
+      ': press a button or move a stick or trigger…'));
+    els.capBar.appendChild(h('button', { type: 'button', class: 'pn-btn', text: 'Clear', onclick: function () {
+      assign(null); } }));
+    els.capBar.appendChild(h('button', { type: 'button', class: 'pn-btn', text: 'Cancel', onclick: endCapture }));
+    els.capBar.classList.remove('hide');
+    renderMap();
+    loop();
+  }
+  function endCapture() {
+    capture = null;
+    if (els.capBar) els.capBar.classList.add('hide');
+    renderMap();
+  }
+  function assign(inp) {
+    if (!capture) return;
+    var old = map[capture.id];
+    if (capture.kind === 'analog') {
+      var m = map[capture.id] = Object.assign({}, map[capture.id] || {});
+      if (inp) m[capture.slot] = inp; else delete m[capture.slot];
+      if (inp && inp.a != null && capture.slot === 'plus' && m.minus && m.minus.a === inp.a) delete m.minus;
+    } else if (inp && inp.a != null) {
+      map[capture.id] = inp;               // a stick direction used as a button
+    } else {
+      if (inp) map[capture.id] = inp; else delete map[capture.id];
+    }
+    // the same physical button must not also fire another button action: that action gets this one's old button
+    if (inp && capture.kind === 'button') BUTTONS.forEach(function (b) {
+      var o = map[b.id];
+      if (b.id !== capture.id && o && JSON.stringify(o) === JSON.stringify(inp)) {
+        if (old) map[b.id] = old; else delete map[b.id];
+      }
+    });
+    saveMap();
+    toast(inp ? 'Mapped to ' + label(inp, pad()) : 'Cleared');
+    endCapture();
+  }
+  function detect(p) {
+    var a = p.axes || [], b = p.buttons || [], base = capture.base;
+    for (var i = 0; i < b.length; i++) {
+      var v = b[i] ? b[i].value || (b[i].pressed ? 1 : 0) : 0;
+      if (v > 0.6 && (base.buttons[i] || 0) < 0.3) return { b: i };
+    }
+    for (var j = 0; j < a.length; j++) {
+      var v0 = base.axes[j] == null ? 0 : base.axes[j], v1 = a[j] || 0;
+      if (Math.abs(v1 - v0) < 0.6) continue;
+      if (v0 < -0.8) return { t: j };     // an axis resting at -1 is a trigger
+      return { a: j, d: v1 > 0 ? 1 : -1 };
+    }
+    return null;
+  }
 
   /* ---------------- mode ---------------- */
   function setMode(want) {
@@ -161,50 +375,48 @@
   }
 
   /* ---------------- input loop ---------------- */
-  function pressed(b, i) { return !!(b[i] && (b[i].pressed || b[i].value > 0.5)); }
-  function edge(b, i) { return pressed(b, i) && !prevButtons[i]; }
-
   function frame(now) {
-    raf = 0;
+    timer = 0;
     var dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 0;
     lastFrame = now;
     var p = pad();
     if (p) {
-      var b = p.buttons || [], a = p.axes || [];
-      if (edge(b, 9)) setMode(!on);
-      if (on && target) {
-        if (edge(b, 0)) savePose();
-        if (edge(b, 1)) centre();
-        if (edge(b, 2)) headStraight();
-        if (edge(b, 3)) setFine(!fine);
-        var f = fine ? FINE : 1, d = dt * f;
-        var lx = dz(a[0] || 0), ly = dz(a[1] || 0), rx = dz(a[2] || 0), ry = dz(a[3] || 0);
-        var lt = b[6] ? b[6].value || 0 : 0, rt = b[7] ? b[7].value || 0 : 0;
-        target.yaw = clamp('yaw', target.yaw - lx * RATE.yaw * d);
-        target.pitch = clamp('pitch', target.pitch + ly * RATE.pitch * d);
-        target.body = clamp('body', target.body - rx * RATE.body * d);
-        target.z = clamp('z', target.z - ry * RATE.z * d);
-        target.x = clamp('x', target.x + (rt - lt) * RATE.x * d);
-        if (pressed(b, 4)) target.roll = clamp('roll', target.roll - RATE.roll * d);
-        if (pressed(b, 5)) target.roll = clamp('roll', target.roll + RATE.roll * d);
-        var both = (pressed(b, 12) ? 1 : 0) - (pressed(b, 13) ? 1 : 0);
-        var opp = (pressed(b, 15) ? 1 : 0) - (pressed(b, 14) ? 1 : 0);
-        if (both || opp) {
-          target.ant_l = clamp('ant_l', target.ant_l + (both + opp) * RATE.ant * d);
-          target.ant_r = clamp('ant_r', target.ant_r + (both - opp) * RATE.ant * d);
+      loadMap(p);
+      if (capture) {
+        if (Date.now() > capture.until) { toast('Nothing pressed; mapping unchanged', true); endCapture(); }
+        else { var got = detect(p); if (got) assign(got); }
+        prevButtons = BUTTONS.map(function (b) { return true; });   // swallow the press that was just mapped
+      } else {
+        var down = {};
+        BUTTONS.forEach(function (b, i) {
+          down[b.id] = buttonDown(b.id, p);
+          if (down[b.id] && !prevButtons[i]) fire(b.id);
+        });
+        prevButtons = BUTTONS.map(function (b) { return down[b.id]; });
+        if (on && target) {
+          var f = fine ? FINE : 1;
+          ANALOG.forEach(function (a) {
+            var v = analog(a.id, p);
+            if (!v) return;
+            Object.keys(a.keys).forEach(function (k) { target[k] = clamp(k, target[k] + v * a.keys[k] * a.rate * f * dt); });
+          });
         }
       }
-      prevButtons = b.map(function (x) { return !!(x && (x.pressed || x.value > 0.5)); });
     }
-    if (on && target) {
-      send(now);
-      paintRead();
-    }
-    if (on || p) raf = setTimeout(tick, TICK_MS);
+    if (on && target) { send(now); paintRead(); }
+    if (on || p || capture) timer = setTimeout(tick, TICK_MS);
     else lastFrame = 0;
   }
+  function fire(id) {
+    if (id === 'toggle') { setMode(!on); return; }
+    if (!on || !target) return;
+    if (id === 'save') savePose();
+    else if (id === 'centre') centre();
+    else if (id === 'straight') headStraight();
+    else if (id === 'fine') setFine(!fine);
+  }
   function tick() { frame(performance.now()); }
-  function loop() { if (!raf) { lastFrame = 0; raf = setTimeout(tick, 0); } }
+  function loop() { if (!timer) { lastFrame = 0; timer = setTimeout(tick, 0); } }
 
   function send(now) {
     if (now - lastSendT < SEND_MS) return;
@@ -220,12 +432,14 @@
 
   /* ---------------- wiring ---------------- */
   window.addEventListener('gamepadconnected', function (e) {
-    padIndex = e.gamepad.index; prevButtons = (e.gamepad.buttons || []).map(function () { return true; });
-    toast('Controller connected'); paint(); loop();
+    padIndex = e.gamepad.index;
+    prevButtons = BUTTONS.map(function () { return true; });   // the press that woke it up does nothing
+    toast('Controller connected'); map = null; paint(); renderMap(); loop();
   });
   window.addEventListener('gamepaddisconnected', function (e) {
     if (padIndex === e.gamepad.index) padIndex = null;
-    toast('Controller disconnected', true); paint();
+    if (capture) endCapture();
+    toast('Controller disconnected', true); paint(); renderMap();
   });
 
   function render(s) {

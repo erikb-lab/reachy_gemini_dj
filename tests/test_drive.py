@@ -78,6 +78,21 @@ def test_start_reads_present_pose(motion):
     motion.drive_stop()
 
 
+def test_antenna_limits_match_pollens_range():
+    # Pollen's recorded moves keep the left antenna >= -60 deg and the right one <= +60 deg
+    assert mo.DRIVE_LIMITS["ant_l"][0] >= -60 and mo.DRIVE_LIMITS["ant_r"][1] <= 60
+
+
+def test_start_outside_range_walks_back_without_a_jump(motion):
+    motion.mini.get_current_joint_positions = lambda: ([0.0] * 7, [0.0, math.radians(-100)])   # left antenna past its stop
+    st = motion.drive_start()
+    assert st["target"]["ant_l"] == mo.DRIVE_LIMITS["ant_l"][0]
+    time.sleep(0.1)
+    motion.drive_stop()
+    first = motion.mini.targets[0][1]                 # [right, left] in radians
+    assert math.degrees(first[1]) < mo.DRIVE_LIMITS["ant_l"][0] - 30   # first command is near -100, not the limit
+
+
 def test_set_requires_mode(motion):
     with pytest.raises(RuntimeError):
         motion.drive_set({"yaw": 10})
