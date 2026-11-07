@@ -29,7 +29,8 @@ class RemoteSession:
     def __init__(self, config, execute_tool: Callable[[str, dict], dict], on_event: Callable[[str, str], None],
                  on_voice_chunk: Callable[[bytes], None] | None = None, on_barge_in: Callable[[], None] | None = None,
                  on_heard: Callable[[str], None] | None = None, on_said: Callable[[str], None] | None = None,
-                 is_speaking: Callable[[], bool] | None = None, get_frame: Callable[[], Any] | None = None):
+                 is_speaking: Callable[[], bool] | None = None, get_frame: Callable[[], Any] | None = None,
+                 tool_specs: Callable[[], list[dict]] | None = None):
         self.config = config
         self.execute_tool = execute_tool
         self.on_event = on_event
@@ -39,6 +40,7 @@ class RemoteSession:
         self.on_said = on_said or (lambda t: None)
         self.is_speaking = is_speaking or (lambda: False)
         self.get_frame = get_frame
+        self.tool_specs = tool_specs or robot_tool_specs
         self.state = "starting"
         self.last_error = ""
         self.connected = False
@@ -115,7 +117,7 @@ class RemoteSession:
 
     def _hello(self) -> dict:
         c = self.config
-        msg = {"type": "hello", "client": "reachy_gemini_dj", "tools": robot_tool_specs(),
+        msg = {"type": "hello", "client": "reachy_gemini_dj", "tools": self.tool_specs(),
                "extra_instructions": c.extra_instructions or "",
                "allow_gemini_assist": bool(getattr(c, "allow_gemini_assist", True))}
         if msg["allow_gemini_assist"] and c.api_key:

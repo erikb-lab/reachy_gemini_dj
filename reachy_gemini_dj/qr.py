@@ -28,20 +28,28 @@ def decode(frame) -> list[str]:
         raise RuntimeError("No QR decoder installed (pip install zxing-cpp)")
 
 
+class MultipleCodes(Exception):
+    """More than one different QR code was in view for the whole scan (e.g. a sheet of team codes)."""
+
+
 def scan(get_frame: Callable[[], object], timeout_s: float = 6.0, interval_s: float = 0.15) -> str | None:
     """Grab camera frames until a QR code is read or the time runs out."""
     end = time.monotonic() + timeout_s
+    saw_many = False
     while time.monotonic() < end:
         frame = get_frame()
         if frame is not None:
-            found = decode(frame)
-            if found:
+            found = list(dict.fromkeys(decode(frame)))
+            if len(found) == 1:
                 return found[0]
+            saw_many = saw_many or len(found) > 1     # never guess between several codes
         time.sleep(interval_s)
+    if saw_many:
+        raise MultipleCodes()
     return None
 
 
-_EVENT = re.compile(r"^(\d{4}[a-z0-9]+)$", re.I)
+_EVENT = re.compile(r"^([a-z0-9]{4,})$", re.I)       # 2026mokc, demo3528, ...
 
 
 def parse_frc(text: str) -> dict:
@@ -68,6 +76,10 @@ def parse_frc(text: str) -> dict:
             m = re.match(r"(?:frc)?(\d{1,5})$", nxt, re.I)
             if m:
                 out["team"] = m.group(1)
+    # Real Nexus team codes: https://frc.nexus/<event>/<team>?key=<secret>   (e.g. /demo3528/1300?key=...)
+    if out["source"] == "nexus" and not (out["event"] or out["team"]) and len(parts) == 2 \
+            and _EVENT.match(parts[0]) and re.fullmatch(r"\d{1,5}", parts[1]):
+        out["event"], out["team"] = parts[0].lower(), parts[1]
     out["event"] = out["event"] or (q.get("event", "").lower() if _EVENT.match(q.get("event", "")) else "")
     if not out["team"] and re.fullmatch(r"\d{1,5}", q.get("team", "")):
         out["team"] = q["team"]

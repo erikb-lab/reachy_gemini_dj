@@ -89,7 +89,7 @@ class FRC:
             if name == "frc_event_status":
                 return self.event_status()
             if name == "frc_team_info":
-                return self.team_info(str(args.get("team") or self.team))
+                return self.team_info(str(args.get("team") or self.team), args.get("year"))
             if name == "frc_rankings":
                 return self.rankings(int(args.get("top") or 5))
             return {"error": f"Unknown FRC tool {name}"}
@@ -104,7 +104,10 @@ class FRC:
     def scan_qr(self) -> dict:
         if not self.get_frame:
             return {"error": "The camera is not available."}
-        text = qr.scan(self.get_frame)
+        try:
+            text = qr.scan(self.get_frame)
+        except qr.MultipleCodes:
+            return {"error": "I can see more than one QR code. Show me just your team's code."}
         if not text:
             return {"error": "I could not find a QR code. Hold it closer to my camera, flat and well lit."}
         info = qr.parse_frc(text)
@@ -186,27 +189,72 @@ class FRC:
         return {"event": ev, "now_queuing": data.get("nowQueuing") or "nothing yet",
                 "announcements": [a[:160] for a in anns[-3:]]}
 
-    def team_info(self, team: str) -> dict:
-        ev = self._need_event()
-        if not team:
+    def team_info(self, team: str, year: int | None = None) -> dict:
+        """About a team: name, home, rookie year, recent events with results, awards. Needs only a Blue Alliance
+        key; if an event is set (and a Nexus key) the pit location and current rank at it are added too."""
+        team = (team or "").strip().lstrip("frcFRC") or self.team
+        if not team.isdigit():
             return {"error": "Which team number?"}
         out: dict = {"team": team}
         try:
-            out["pit"] = (self._nexus(f"/event/{ev}/pits") or {}).get(team) or "unknown"
-        except Exception as e:
-            out["pit"] = f"unavailable ({str(e)[:60]})"
-        try:
-            t = self._tba(f"/team/frc{team}/simple")
+            t = self._tba(f"/team/frc{team}")
             out["name"] = t.get("nickname", "")
             out["from"] = ", ".join(x for x in (t.get("city"), t.get("state_prov")) if x)
-            r = self._tba(f"/team/frc{team}/event/{ev}/status") or {}
-            q = (r.get("qual") or {}).get("ranking") or {}
-            if q.get("rank"):
-                rec = q.get("record") or {}
-                out["rank"] = q["rank"]
-                out["record"] = f"{rec.get('wins', 0)}-{rec.get('losses', 0)}-{rec.get('ties', 0)}"
+            if t.get("rookie_year"):
+                out["rookie_year"] = t["rookie_year"]
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:
+            out["note"] = str(e)[:120]
+        this_year = int(year or time.localtime().tm_year)
+        try:
+            events = self._tba(f"/team/frc{team}/events/simple") or []
+            events = sorted(events, key=lambda e: e.get("start_date") or "", reverse=True)
+            out["recent_events"] = [f"{e.get('name', '?')} ({e.get('year', '')})" for e in events[:6]]
+            yr = this_year if any(e.get("year") == this_year for e in events) else (events[0].get("year") if events else 0)
+            if yr:
+                names = {e.get("key"): e.get("name", "") for e in events}
+                statuses = self._tba(f"/team/frc{team}/events/{yr}/statuses") or {}
+                results = []
+                for key, st in statuses.items():
+                    st = st or {}
+                    q = ((st.get("qual") or {}).get("ranking") or {})
+                    rec = q.get("record") or {}
+                    row = {"event": names.get(key, key), "year": yr}
+                    if q.get("rank"):
+                        row["qual_rank"] = q["rank"]
+                        row["record"] = f"{rec.get('wins', 0)}-{rec.get('losses', 0)}-{rec.get('ties', 0)}"
+                    po = (st.get("playoff") or {}).get("level")
+                    if po:
+                        row["playoffs"] = po
+                    results.append(row)
+                if results:
+                    out["results_" + str(yr)] = results[:4]
+        except urllib.error.HTTPError:
+            raise
         except Exception as e:
             out.setdefault("note", str(e)[:120])
+        try:
+            aw = sorted(self._tba(f"/team/frc{team}/awards") or [], key=lambda a: a.get("year", 0), reverse=True)
+            out["recent_awards"] = [f"{a.get('name', '')} ({a.get('year', '')})" for a in aw[:4]]
+        except Exception:
+            pass
+        ev = self.event
+        if ev:                                 # only when an event is set: where they are and how they are doing now
+            if getattr(self.config, "nexus_api_key", ""):
+                try:
+                    out["pit"] = (self._nexus(f"/event/{ev}/pits") or {}).get(team) or "unknown"
+                except Exception:
+                    pass
+            try:
+                r = self._tba(f"/team/frc{team}/event/{ev}/status") or {}
+                q = (r.get("qual") or {}).get("ranking") or {}
+                if q.get("rank"):
+                    rec = q.get("record") or {}
+                    out["rank_at_event"] = q["rank"]
+                    out["record_at_event"] = f"{rec.get('wins', 0)}-{rec.get('losses', 0)}-{rec.get('ties', 0)}"
+            except Exception:
+                pass
         return out
 
     def rankings(self, top: int = 5) -> dict:

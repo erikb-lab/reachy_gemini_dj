@@ -29,11 +29,22 @@ def _lower(d: dict) -> dict:
     return out
 
 
-def robot_tool_specs() -> list[dict]:
+GOOGLE_TOOL_SERVICE = {"calendar_events": "calendar", "calendar_add": "calendar", "tasks_list": "tasks",
+                       "tasks_add": "tasks", "tasks_complete": "tasks", "gmail_check": "gmail"}
+
+
+def robot_tool_specs(google_services=None, frc_enabled: bool | None = None) -> list[dict]:
+    """Tool list sent to the brain. Every tool costs prompt tokens (~100 each, ~22 tokens/s to read on a laptop
+    CPU), so pass google_services / frc_enabled to leave out tools that cannot work yet. None = include all."""
     from .gemini import build_tools
     specs = []
     for tool in build_tools(enable_search=False):
         for decl in tool.function_declarations or []:
+            svc = GOOGLE_TOOL_SERVICE.get(decl.name)
+            if google_services is not None and svc and svc not in google_services:
+                continue
+            if frc_enabled is False and decl.name.startswith("frc_"):
+                continue
             params = _json_schema(decl.parameters) if decl.parameters else {"type": "object", "properties": {}}
             params.setdefault("properties", {})
             specs.append({"name": decl.name, "description": decl.description or "", "parameters": params,

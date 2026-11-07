@@ -152,7 +152,10 @@ class Motion:
         if not self._enabled():
             log.debug("Movement is turned off in the settings; ignoring move: %s", label)
             return
-        item = (label, fn)
+        def powered(fn=fn):
+            self._ensure_motors()
+            fn()
+        item = (label, powered)
         try:
             self._q.put_nowait(item)
         except queue.Full:
@@ -161,6 +164,13 @@ class Motion:
             except queue.Empty:
                 pass
             self._q.put_nowait(item)
+
+    def _ensure_motors(self) -> None:
+        """The robot daemon can start (or be left) with motors off; a move would then silently do nothing."""
+        try:
+            self.mini.enable_motors()
+        except Exception as e:
+            log.warning("could not enable motors: %s", e)
 
     # ------------------------------------------------------------------- actions ---
     def move_head(self, direction: str) -> str:

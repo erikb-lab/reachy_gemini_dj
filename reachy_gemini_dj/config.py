@@ -22,6 +22,7 @@ class Config:
     music_volume: float = 2.00  # linear gain 0.0-2.5 (1.0 = unity, 2.0 = 200%); see gain.py
     duck_level: float = 0.20  # fraction 0.0-1.0 of music_volume while someone talks
     voice_gain: float = 1.50
+    hw_speaker_percent: int = 100   # speaker chip's own level, set at start (the robot ships at 72% = -17 dB); 0 = leave alone
     echo_guard: float = 1.50
     web_search: bool = False
     motion_enabled: bool = True

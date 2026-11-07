@@ -31,6 +31,9 @@ def test_parse_frc_links():
     assert qr.parse_frc("https://www.thebluealliance.com/event/2026mokc")["event"] == "2026mokc"
     assert qr.parse_frc("https://www.thebluealliance.com/team/254")["team"] == "254"
     assert qr.parse_frc("https://frc.nexus/t/abc?event=2026txda&team=118") == {"source": "nexus", "event": "2026txda", "team": "118"}
+    # what a real Nexus handout QR encodes (checked against the demo3528 event sheet; the key here is fake)
+    assert qr.parse_frc("https://frc.nexus/demo3528/1300?key=FAKEKEY_abc-123") == {"source": "nexus", "event": "demo3528", "team": "1300"}
+    assert qr.parse_frc("https://frc.nexus/2026mokc/254?key=x")["event"] == "2026mokc"
     assert qr.parse_frc("hello world")["source"] == ""
 
 
@@ -111,13 +114,14 @@ def test_rankings_and_team_info():
     http = fake_http({
         "/event/2026mokc/rankings": {"rankings": [{"rank": 1, "team_key": "frc254"}, {"rank": 2, "team_key": "frc1234"}]},
         "/event/2026mokc/pits": {"254": "A3"},
-        "/team/frc254/simple": {"nickname": "The Cheesy Poofs", "city": "San Jose", "state_prov": "CA"},
+        "/team/frc254": {"nickname": "The Cheesy Poofs", "city": "San Jose", "state_prov": "CA"},
+        "/team/frc254/events/simple": [], "/team/frc254/awards": [],
         "/team/frc254/event/2026mokc/status": {"qual": {"ranking": {"rank": 1, "record": {"wins": 9, "losses": 1, "ties": 0}}}},
     })
     f = FRC(cfg(frc_team="1234", frc_event="2026mokc"), http_get=http)
     assert f.handle("frc_rankings", {"top": 2}) == {"top": [{"rank": 1, "team": "254"}, {"rank": 2, "team": "1234"}], "our_rank": 2}
     info = f.handle("frc_team_info", {"team": "254"})
-    assert info["pit"] == "A3" and info["name"] == "The Cheesy Poofs" and info["record"] == "9-1-0"
+    assert info["pit"] == "A3" and info["name"] == "The Cheesy Poofs" and info["record_at_event"] == "9-1-0" and info["rank_at_event"] == 1
 
 
 def test_queuing_alerts_spoken_once_per_status():
@@ -144,3 +148,43 @@ def test_http_errors_become_readable():
         raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
     f = FRC(cfg(frc_team="1234", frc_event="2026mokc"), http_get=boom)
     assert "rejected" in f.handle("frc_event_status", {})["error"]
+
+
+def test_scan_refuses_to_guess_between_several_codes():
+    import numpy as np
+    from reachy_gemini_dj import qr as _qr
+    orig = _qr.decode
+    _qr.decode = lambda frame: ["https://frc.nexus/demo3528/100?key=a", "https://frc.nexus/demo3528/1300?key=b"]
+    try:
+        with pytest.raises(_qr.MultipleCodes):
+            _qr.scan(lambda: np.zeros((4, 4, 3), np.uint8), timeout_s=0.2, interval_s=0.05)
+    finally:
+        _qr.decode = orig
+
+
+def test_team_info_works_without_an_event():
+    calls = []
+
+    def http(url, headers, timeout=8.0):
+        calls.append(url)
+        if url.endswith("/team/frc254"):
+            return {"nickname": "The Cheesy Poofs", "city": "San Jose", "state_prov": "California", "rookie_year": 1999}
+        if url.endswith("/events/simple"):
+            return [{"key": "2025cmptx", "name": "Championship", "year": 2025, "start_date": "2025-04-16"},
+                    {"key": "2025caph", "name": "Silicon Valley Regional", "year": 2025, "start_date": "2025-03-01"}]
+        if url.endswith("/events/2025/statuses"):
+            return {"2025caph": {"qual": {"ranking": {"rank": 2, "record": {"wins": 11, "losses": 1, "ties": 0}}},
+                                 "playoff": {"level": "f"}}, "2025cmptx": None}
+        if url.endswith("/awards"):
+            return [{"name": "Regional Winner", "year": 2025}]
+        raise AssertionError("unexpected " + url)
+
+    f = FRC(cfg(frc_team="", frc_event=""), http_get=http)
+    r = f.handle("frc_team_info", {"team": "254"})
+    assert r["name"] == "The Cheesy Poofs" and r["rookie_year"] == 1999
+    assert r["recent_events"][0] == "Championship (2025)"
+    assert r["results_2025"][1] == {"event": "Silicon Valley Regional", "year": 2025, "qual_rank": 2,
+                                    "record": "11-1-0", "playoffs": "f"} or r["results_2025"][0]["qual_rank"] == 2
+    assert r["recent_awards"] == ["Regional Winner (2025)"]
+    assert "pit" not in r and not any("nexus" in c for c in calls)
+    assert "error" not in r

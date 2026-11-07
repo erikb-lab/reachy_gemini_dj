@@ -83,3 +83,29 @@ def test_watchdog_switches_back_when_brain_returns(monkeypatch):
         time.sleep(0.1)
     vb._stop.set()
     assert vb.active_name == "local"
+
+
+def test_tool_specs_drop_unusable_tools():
+    from reachy_gemini_dj.tool_schemas import robot_tool_specs
+    names = lambda specs: {t["name"] for t in specs}
+    allt = names(robot_tool_specs())
+    lean = names(robot_tool_specs(google_services=set(), frc_enabled=False))
+    assert {"calendar_events", "tasks_list", "gmail_check", "frc_rankings"} <= allt
+    assert not lean & {"calendar_events", "calendar_add", "tasks_list", "tasks_add", "tasks_complete",
+                       "gmail_check", "frc_next_match", "frc_rankings"}
+    assert {"play_music", "scan_qr", "robot_pose"} <= lean
+    assert "calendar_events" in names(robot_tool_specs(google_services={"calendar"}, frc_enabled=True))
+    assert "tasks_list" not in names(robot_tool_specs(google_services={"calendar"}))
+
+
+def test_hw_speaker_level_command(monkeypatch):
+    from reachy_gemini_dj import audio
+    calls = []
+    monkeypatch.setattr(audio.shutil, "which", lambda n: "/usr/bin/amixer")
+
+    class R:
+        returncode, stderr = 0, ""
+    monkeypatch.setattr(audio.subprocess, "run", lambda cmd, **k: calls.append(cmd) or R())
+    assert audio.set_hw_speaker_level(100) == "speaker level 100%"
+    assert calls[0][-3:] == ["sset", "PCM,0", "100%"]
+    assert audio.set_hw_speaker_level(0) == "left alone" and len(calls) == 1

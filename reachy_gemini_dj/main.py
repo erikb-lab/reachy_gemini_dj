@@ -19,10 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
 
-from .audio import AudioPipeline
+from .audio import AudioPipeline, set_hw_speaker_level
 from .backends import VoiceBackend
 from .config import Config
 from .frc import FRC
+from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
@@ -44,6 +45,7 @@ class ConfigUpdate(BaseModel):
     music_volume: float | None = None
     duck_level: float | None = None
     voice_gain: float | None = None
+    hw_speaker_percent: int | None = None
     echo_guard: float | None = None
     web_search: bool | None = None
     motion_enabled: bool | None = None
@@ -59,6 +61,7 @@ class ConfigUpdate(BaseModel):
     frc_alerts: bool | None = None
 
 
+FRC_KEYS = {"nexus_api_key", "tba_api_key"}
 VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
 
 
@@ -127,9 +130,10 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_event=self.record_event,
             on_voice_chunk=lambda chunk: self.audio_pipe.play_voice(chunk) if self.audio_pipe else None,
             on_barge_in=lambda: self.audio_pipe.clear_voice() if self.audio_pipe else None,
-            on_heard=self._set_heard,
+            on_heard=self._set_heard_turn,
             on_said=self._set_said,
             is_speaking=lambda: bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
+            tool_specs=self._tool_specs,
             get_frame=self._get_frame,
         )
         # Local brain first, Gemini Live as fallback (see backends.py); both share execute_tool.
@@ -152,6 +156,11 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
     def _set_heard(self, text: str) -> None:
         self.heard_text = (self.heard_text + " " + text).strip()[-300:]
+
+    def _set_heard_turn(self, text: str) -> None:
+        """Local brain: 'heard' is one complete utterance and starts a new turn (Gemini streams fragments instead)."""
+        self.heard_text = text.strip()[-300:]
+        self.said_text = ""
 
     def _set_said(self, text: str) -> None:
         self.said_text = (self.said_text + " " + text).strip()[-300:]
@@ -245,8 +254,10 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
-            if VOICE_KEYS & d.keys():
-                self.voice.init_client()
+            if d.get("hw_speaker_percent") is not None:
+                set_hw_speaker_level(self.config.hw_speaker_percent)
+            if (VOICE_KEYS | FRC_KEYS) & d.keys():
+                self.voice.init_client()          # the local brain's tool list depends on the FRC keys
             return {"ok": True}
 
         @app.post("/api/mute")
@@ -387,6 +398,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         def google_finish(req: GoogleFinishRequest):
             try:
                 res = self.google_account.finish(req.redirect_url)
+                self.voice.init_client()          # now offer the Google tools to the local brain
                 return {"ok": True, "public": res}
             except Exception as e:
                 return {"ok": False, "error": str(e)}
@@ -394,7 +406,13 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.post("/api/google/disconnect")
         def google_disconnect():
             self.google_account.disconnect()
+            self.voice.init_client()
             return {"ok": True}
+
+    def _tool_specs(self) -> list[dict]:
+        """Tools offered to the local brain: only those that can work (each one costs prompt tokens to read)."""
+        return robot_tool_specs(google_services=set(self.google_account.granted()) if self.google_account.connected else set(),
+                                frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
         log.info("Starting Reachy Gemini DJ v0.4.0...")

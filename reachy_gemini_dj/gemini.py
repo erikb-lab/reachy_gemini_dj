@@ -144,10 +144,12 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         ),
         types.FunctionDeclaration(
             name="frc_team_info",
-            description="Facts about an FRC team at this event: pit location, team name, ranking and win-loss record.",
+            description="Look up any FRC team (no event needed): name, hometown, rookie year, recent competitions "
+                        "and results, and awards. If an event is set, also its pit location and rank there.",
             parameters=types.Schema(
                 type="OBJECT",
-                properties={"team": types.Schema(type="STRING", description="Team number, e.g. 254; empty for our team.")},
+                properties={"team": types.Schema(type="STRING", description="Team number, e.g. 254; empty for our team."),
+                            "year": types.Schema(type="INTEGER", description="Season for detailed results (default: current).")},
             ),
         ),
         types.FunctionDeclaration(

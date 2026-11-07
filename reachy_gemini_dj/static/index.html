@@ -55,6 +55,11 @@
           <input type="range" id="music_volume" min="0" max="2.5" step="0.05" aria-label="Music volume">
           <output id="o-vol" for="music_volume">0%</output>
         </div>
+        <div class="vol" title="How loud Reachy's own voice is (separate from the music)">
+          <span class="i" aria-hidden="true">&#128483;</span>
+          <input type="range" id="voice_gain_q" min="0.2" max="2.5" step="0.05" aria-label="Reachy voice volume">
+          <output id="o-vg" for="voice_gain_q">0</output>
+        </div>
         <div id="merr" class="note bad hide" role="alert"></div>
       </section>
 

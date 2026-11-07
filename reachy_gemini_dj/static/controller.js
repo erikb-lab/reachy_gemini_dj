@@ -82,11 +82,24 @@ $('b-newconv').onclick = () => post('/api/new_conversation', {}, 'Fresh conversa
 
 /* ---------- settings (built-in quick settings) ---------- */
 const SL = { music_volume: v => Math.round(v * 100) + '%', duck_level: v => Math.round(v * 100) + '%', voice_gain: v => v.toFixed(2) + 'x', echo_guard: v => v.toFixed(1) };
+/* Sliders apply while dragging (throttled), not only on release */
+const liveTimers = {};
+function applyLive(key, val) {
+  if (liveTimers[key]) return;
+  liveTimers[key] = setTimeout(() => { delete liveTimers[key]; api('/api/config', { [key]: +liveVal[key] }).catch(() => {}); }, 120);
+  liveVal[key] = val;
+}
+const liveVal = {};
 Object.keys(SL).forEach(id => {
   const inp = $(id), out = id === 'music_volume' ? $('o-vol') : inp.parentNode.querySelector('output');
-  inp.addEventListener('input', () => { picking = id; out.textContent = SL[id](+inp.value); });
+  inp.addEventListener('input', () => { picking = id; out.textContent = SL[id](+inp.value); applyLive(id, +inp.value); });
   inp.addEventListener('change', () => api('/api/config', { [id]: +inp.value }).catch(e => toast('Save failed: ' + e.message)).finally(() => { picking = null; }));
 });
+{ /* Reachy's voice loudness also lives next to the music slider; both edit config.voice_gain */
+  const q = $('voice_gain_q'), o = $('o-vg');
+  q.addEventListener('input', () => { picking = 'voice_gain_q'; o.textContent = SL.voice_gain(+q.value); applyLive('voice_gain', +q.value); });
+  q.addEventListener('change', () => api('/api/config', { voice_gain: +q.value }).catch(e => toast('Save failed: ' + e.message)).finally(() => { picking = null; }));
+}
 document.querySelectorAll('input[data-cfg]').forEach(c => c.addEventListener('change', () =>
   post('/api/config', { [c.dataset.cfg]: c.checked }, 'Saved')));
 $('q_voice').addEventListener('change', e => post('/api/config', { voice: e.target.value }, 'Voice changed'));
@@ -195,6 +208,7 @@ function render() {
 
   /* settings */
   if (picking !== 'music_volume') { $('music_volume').value = c.music_volume; $('o-vol').textContent = SL.music_volume(+c.music_volume); }
+  if (picking !== 'voice_gain_q') { $('voice_gain_q').value = c.voice_gain; $('o-vg').textContent = SL.voice_gain(+c.voice_gain); }
   ['duck_level', 'voice_gain', 'echo_guard'].forEach(id => { if (picking === id) return; const i = $(id); i.value = c[id]; i.parentNode.querySelector('output').textContent = SL[id](+c[id]); });
   document.querySelectorAll('input[data-cfg]').forEach(x => { if (document.activeElement !== x) x.checked = !!c[x.dataset.cfg]; });
   const vs = $('q_voice'); if (!vs.options.length) (S.voices || []).forEach(v => vs.add(new Option(v, v)));
