@@ -56,6 +56,118 @@ def resample(x: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
     ).astype(np.float32)
 
 
+# ---------------------------------------------------------------------------------------------------------
+# Push-to-talk
+# ---------------------------------------------------------------------------------------------------------
+PTT_PREROLL_S = 0.30      # audio kept from just before the press so the first word is not clipped
+PTT_TAIL_S = 0.90         # silence sent after release: closes the brain's VAD (650 ms) and Gemini's activity detection
+PTT_MAX_HOLD_S = 30.0     # safety: a stuck button / lost "up" event releases itself
+LISTEN_MODES = ("always", "push_to_talk")
+
+
+class PttGate:
+    """Decides which mic frames reach the voice backend in push-to-talk mode. Pure logic, no hardware, thread-safe.
+
+    Idle:  frames are dropped but the last ~300 ms are remembered (pre-roll).
+    Held:  frames are passed through; the pre-roll is delivered ahead of the first one after the press.
+    Tail:  after release, ~0.9 s of silence (same length as each incoming frame, so it is paced in real time)
+           is sent instead of the mic, then the gate goes idle again.
+    All frames are 16 kHz 16-bit mono PCM bytes. `clock` is injectable for tests.
+    """
+
+    def __init__(self, preroll_s: float = PTT_PREROLL_S, tail_s: float = PTT_TAIL_S,
+                 max_hold_s: float = PTT_MAX_HOLD_S, sample_rate: int = GEMINI_IN_SR, clock=time.monotonic):
+        self._preroll_bytes = int(preroll_s * sample_rate) * 2
+        self._tail_bytes = int(tail_s * sample_rate) * 2
+        self._max_hold_s = max_hold_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._preroll: collections.deque[bytes] = collections.deque()
+        self._preroll_len = 0
+        self._held = False
+        self._since = 0.0
+        self._deliver_preroll = False
+        self._tail_left = 0
+
+    def _expire(self) -> None:          # caller holds the lock
+        if self._held and self._clock() - self._since > self._max_hold_s:
+            log.warning("push-to-talk: auto-released after %.0f s held", self._max_hold_s)
+            self._release()
+
+    def _release(self) -> None:
+        if not self._held:
+            return
+        self._held = False
+        self._deliver_preroll = False
+        self._tail_left = self._tail_bytes
+        self._preroll.clear()
+        self._preroll_len = 0
+
+    @property
+    def active(self) -> bool:
+        with self._lock:
+            self._expire()
+            return self._held
+
+    def press(self) -> bool:
+        """Start talking. Returns True if this was a new press (not already held)."""
+        with self._lock:
+            self._expire()
+            if self._held:
+                self._since = self._clock()
+                return False
+            self._held = True
+            self._since = self._clock()
+            self._tail_left = 0
+            self._deliver_preroll = True
+            return True
+
+    def release(self) -> bool:
+        """Stop talking. Returns True if it was held."""
+        with self._lock:
+            was = self._held
+            self._release()
+            return was
+
+    def toggle(self) -> bool:
+        """Tap-to-start / tap-to-stop (one-button devices). Returns the new held state."""
+        if self.active:
+            self.release()
+            return False
+        self.press()
+        return True
+
+    def reset(self) -> None:
+        with self._lock:
+            self._held = False
+            self._deliver_preroll = False
+            self._tail_left = 0
+            self._preroll.clear()
+            self._preroll_len = 0
+
+    def process(self, pcm: bytes) -> list[bytes]:
+        """Feed one mic frame; returns the frames (possibly none) to send to the backend, in order."""
+        with self._lock:
+            self._expire()
+            if self._held:
+                out = []
+                if self._deliver_preroll:
+                    out.extend(self._preroll)
+                    self._preroll.clear()
+                    self._preroll_len = 0
+                    self._deliver_preroll = False
+                out.append(pcm)
+                return out
+            if self._tail_left > 0:
+                self._tail_left -= len(pcm)
+                return [bytes(len(pcm))]
+            self._preroll.append(pcm)
+            self._preroll_len += len(pcm)
+            while len(self._preroll) > 1 and self._preroll_len - len(self._preroll[0]) >= self._preroll_bytes:
+                self._preroll_len -= len(self._preroll.popleft())
+            return []
+
+
 def set_hw_speaker_level(percent: int) -> str:
     """Set the Reachy Mini speaker's ALSA 'PCM' playback level (stereo front control). Returns a status string.
     The robot ships at 72% (-17 dB), which makes music quiet no matter what the app's gain says."""
@@ -91,6 +203,7 @@ class AudioPipeline:
         music,
         on_level: Callable[[float], None] | None = None,
         on_pcm_chunk: Callable[[bytes], None] | None = None,
+        on_talk_pressed: Callable[[], None] | None = None,
     ):
         self.mini = mini
         self.stop = stop
@@ -98,6 +211,10 @@ class AudioPipeline:
         self.music = music
         self.on_level = on_level or (lambda lvl: None)
         self.on_pcm_chunk = on_pcm_chunk
+        # Called on every talk-button press (also in "always" mode); e.g. to dismiss an alarm. May be set later.
+        self.on_talk_pressed = on_talk_pressed
+        self._ptt = PttGate()
+        self._ptt_was_held = False
 
         # Hardware media interface
         self.media = getattr(mini, "media", mini)
@@ -134,6 +251,45 @@ class AudioPipeline:
             return int(val) if val else default
         except Exception:
             return default
+
+    # ---------- push-to-talk (see PttGate); the API a physical button calls through main.py's /api/ptt ----------
+    @property
+    def listen_mode(self) -> str:
+        m = str(getattr(self.config, "listen_mode", "always") or "always").lower()
+        return m if m in LISTEN_MODES else "always"
+
+    @property
+    def ptt_active(self) -> bool:
+        return self.listen_mode == "push_to_talk" and self._ptt.active
+
+    def _talk_pressed(self) -> None:
+        """Pressing talk while the robot speaks is a barge-in; then tell the optional hook (alarm dismiss etc.)."""
+        if self._is_robot_speaking:
+            self.clear_voice()
+        cb = self.on_talk_pressed
+        if cb:
+            try:
+                cb()
+            except Exception as e:
+                log.warning("on_talk_pressed hook failed: %s", e)
+
+    def ptt_set(self, down: bool) -> bool:
+        """Talk button down/up. In "always" mode only a press has an effect (barge-in + hook); audio is untouched.
+        Returns whether talk is now held."""
+        if down:
+            new = self._ptt.press() if self.listen_mode == "push_to_talk" else True
+            if new:
+                self._talk_pressed()
+                if self.listen_mode == "push_to_talk":
+                    self.music.set_duck(self.config.duck_level)
+        else:
+            self._ptt.release()
+            if not self._user_speaking and not self._is_robot_speaking:
+                self.music.reset_duck()
+        return self.ptt_active
+
+    def ptt_toggle(self) -> bool:
+        return self.ptt_set(not self.ptt_active)
 
     def set_mute(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -254,8 +410,21 @@ class AudioPipeline:
                     if not self._is_robot_speaking:
                         self.music.reset_duck()
 
+                # Push-to-talk: only frames the gate lets through are sent ("always" mode skips this block)
+                ptt_on = self.listen_mode == "push_to_talk"
+                if not ptt_on and self._ptt.active:
+                    self._ptt.reset()                  # switched back to "always" while held
+                if self.on_pcm_chunk and ptt_on:
+                    # The user is deliberately talking, so no echo attenuation (music is ducked on press instead)
+                    raw = (np.clip(x16, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                    for chunk in self._ptt.process(raw):
+                        self.on_pcm_chunk(chunk)
+                    held = self._ptt.active
+                    if self._ptt_was_held and not held and not self._user_speaking and not self._is_robot_speaking:
+                        self.music.reset_duck()        # released by the 30 s safety, not by the button
+                    self._ptt_was_held = held
                 # Stream audio to Gemini Live if callback registered
-                if self.on_pcm_chunk:
+                elif self.on_pcm_chunk:
                     # Echo suppression: if robot is speaking and user is NOT clearly interrupting,
                     # attenuate mic input so Gemini doesn't hear its own echo
                     if (self._is_robot_speaking or music_on) and not (rms > 0.12 * echo_factor):

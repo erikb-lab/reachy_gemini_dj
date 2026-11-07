@@ -38,7 +38,8 @@ class RemoteSession:
                  on_heard: Callable[[str], None] | None = None, on_said: Callable[[str], None] | None = None,
                  is_speaking: Callable[[], bool] | None = None, get_frame: Callable[[], Any] | None = None,
                  tool_specs: Callable[[], list[dict]] | None = None,
-                 seconds_since_user_spoke: Callable[[], float] | None = None):
+                 seconds_since_user_spoke: Callable[[], float] | None = None,
+                 on_state: Callable[[str, str], None] | None = None):
         self.config = config
         self.execute_tool = execute_tool
         self.on_event = on_event
@@ -47,6 +48,9 @@ class RemoteSession:
         self.on_heard = on_heard or (lambda t: None)
         self.on_said = on_said or (lambda t: None)
         self.is_speaking = is_speaking or (lambda: False)
+        # Called as on_state(state, detail) whenever the brain reports "thinking" / "speaking" / "listening" (or the
+        # link drops: "error"); used for the thinking head tilt. Must be quick and must not raise.
+        self.on_state = on_state or (lambda s, d="": None)
         self.get_frame = get_frame
         self.tool_specs = tool_specs or robot_tool_specs
         self.seconds_since_user_spoke = seconds_since_user_spoke or (lambda: 0.0)
@@ -110,6 +114,12 @@ class RemoteSession:
         return self._turn_started is not None and time.monotonic() - self._turn_started > TURN_TIMEOUT_S
 
     # ---------- internals ----------
+    def _emit_state(self, state: str, detail: str = "") -> None:
+        try:
+            self.on_state(state, detail)
+        except Exception:
+            log.debug("on_state callback failed", exc_info=True)
+
     def _put(self, item) -> None:
         q = self._out
         if q is None:
@@ -195,6 +205,7 @@ class RemoteSession:
                 self.connected = False
                 self._turn_started = None
                 self.on_barge_in()
+                self._emit_state("disconnected")
             if not self._stop.is_set():
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 15.0)
@@ -227,6 +238,7 @@ class RemoteSession:
             if t == "state":
                 s = m.get("state", "")
                 self.state = s
+                self._emit_state(s, str(m.get("detail") or ""))
                 if s == "thinking" and self._turn_started is None:
                     self._turn_started = time.monotonic()
             elif t == "heard":

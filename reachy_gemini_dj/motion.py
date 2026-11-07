@@ -61,6 +61,10 @@ DIRECTIONS = {
 }
 
 
+THINK_TILT_DEG = 9.0      # sideways head roll for the "thinking" tilt
+THINK_TILT_S = 1.4        # slow on purpose
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
 
@@ -77,6 +81,8 @@ class Motion:
         self.error = ""
         self.recent: collections.deque = collections.deque(maxlen=5)
         self.learning = False
+        self._thinking = False                 # wanted: head tilted while the brain thinks
+        self._tilted = False                   # the head is actually tilted
         from .poses import PoseStore
         self.poses = PoseStore()
         threading.Thread(target=self._worker, daemon=True, name="motion").start()
@@ -235,6 +241,48 @@ class Motion:
 
         self._submit(f"dance {name}", run)
         return name
+
+    def thinking(self, on: bool) -> None:
+        """Subtle, slow, curious head tilt while the local brain works on a turn; back to neutral when it is over.
+
+        Cheap (flag checks only) and polite: skipped if motion is off, in learn mode, or a move/dance is running or
+        queued (the tilt is never allowed to interrupt or replace one). Safe to call repeatedly with the same value.
+        """
+        if on:
+            if self._thinking:
+                return
+            if self.learning or not self._enabled() or self.busy or not self._q.empty():
+                return
+            self._thinking = True
+
+            def tilt():
+                if not self._thinking:             # the turn ended while this was waiting in the queue
+                    return
+                from reachy_mini.utils import create_head_pose
+                self.mini.goto_target(head=create_head_pose(roll=THINK_TILT_DEG, pitch=-3, yaw=4, degrees=True),
+                                      duration=THINK_TILT_S)
+                self._tilted = True
+                if not self._thinking:             # the turn ended while the head was tilting: level it right away
+                    self.mini.goto_target(head=create_head_pose(), duration=1.0)
+                    self._tilted = False
+
+            self._submit("thinking", tilt)
+            return
+        self._thinking = False
+        if not self._tilted:
+            return
+        if self.learning or self.busy or not self._q.empty():
+            self._tilted = False                   # another move is running or queued and will move the head anyway
+            return
+
+        def level():
+            if self._thinking or not self._tilted:
+                return
+            from reachy_mini.utils import create_head_pose
+            self.mini.goto_target(head=create_head_pose(), duration=1.0)
+            self._tilted = False
+
+        self._submit("thinking done", level)
 
     # ------------------------------------------------------------- learn poses ---
     def learn_start(self) -> str:
