@@ -135,6 +135,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
             is_speaking=lambda: bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
             tool_specs=self._tool_specs,
             get_frame=self._get_frame,
+            seconds_since_user_spoke=lambda: (time.monotonic() - (self.audio_pipe._last_user_speech - 0.7))
+            if self.audio_pipe else 1e9,
         )
         # Local brain first, Gemini Live as fallback (see backends.py); both share execute_tool.
         self.voice = VoiceBackend(
@@ -245,6 +247,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.post("/api/config")
         def update_config(data: ConfigUpdate):
             d = data.model_dump(exclude_unset=True)
+            if d.get("brain_url") and not str(d["brain_url"]).strip().lower().startswith(("ws://", "wss://")):
+                return {"ok": False, "error": "Brain URL must start with ws:// or wss://"}
             if d.get("music_volume") is not None:
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:

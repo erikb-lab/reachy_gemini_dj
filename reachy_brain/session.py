@@ -112,6 +112,7 @@ class BrainSession:
         self.extra_instructions = ""
         self.gemini_key = cfg.gemini_api_key
         self.allow_assist = True
+        self.robot_assist = False                   # the robot calls Gemini itself (its key never comes here)
         self.vision = bool(cfg.mmproj_path)
         self.turns: list[list[dict]] = []          # past turns, each the full message list incl. tool calls
         self._utts: queue.Queue = queue.Queue()
@@ -132,6 +133,7 @@ class BrainSession:
         self.robot_kinds = {t["name"]: t.get("kind", "action") for t in tools}
         self.extra_instructions = msg.get("extra_instructions") or ""
         self.allow_assist = bool(msg.get("allow_gemini_assist", True))
+        self.robot_assist = bool(msg.get("assist_on_robot"))
         if msg.get("gemini_key") and not self.cfg.gemini_api_key:
             self.gemini_key = msg["gemini_key"]
         self.send_json({"type": "ready", "vision": self.vision, "assist": self._assist_on(),
@@ -199,7 +201,7 @@ class BrainSession:
                 self.turns.pop(0)
 
     def _assist_on(self) -> bool:
-        return bool(self.allow_assist and self.gemini_key)
+        return bool(self.allow_assist and (self.gemini_key or self.robot_assist))
 
     def _tools(self) -> list[dict]:
         tools = list(self.robot_tools)
@@ -371,7 +373,10 @@ class BrainSession:
                 except json.JSONDecodeError:
                     args = {}
                 self.send_json({"type": "event", "kind": "tool", "text": f"{name} {args}"})
-                if name in SERVER_TOOLS:
+                if name == "ask_gemini" and not self.gemini_key and self.robot_assist:
+                    self._state("thinking", name)
+                    res = self._robot_call(name, args, 60.0)      # robot asks Gemini with its own key
+                elif name in SERVER_TOOLS:
                     self._state("thinking", name)
                     res = run_server_tool(name, args, gemini_key=self.gemini_key, assist_model=self.cfg.assist_model,
                                           look=self._look)
