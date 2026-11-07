@@ -13,8 +13,11 @@
   var FINE = 0.3;                        // fine mode speed factor
   var SEND_MS = 60;
   var TICK_MS = 25;                      // controller poll interval (a timer: animation frames can stall in embedded views)
-  var LIMITS = { x: [-15, 15], y: [-15, 15], z: [-15, 20], roll: [-25, 25], pitch: [-30, 30], yaw: [-60, 60],
-                 body: [-150, 150], ant_l: [-45, 150], ant_r: [-150, 45] };   // same as motion.py
+  // Official limits (sent by the robot when gamepad mode starts; these are only the fallback): head pitch/roll
+  // +-40, head yaw +-180, body +-160, head yaw within 65 of the body; antennas = Pollen's recorded move range.
+  var LIMITS = { x: [-15, 15], y: [-15, 15], z: [-15, 20], roll: [-40, 40], pitch: [-40, 40], yaw: [-180, 180],
+                 body: [-160, 160], ant_l: [-60, 194], ant_r: [-182, 60] };
+  var MAX_REL_YAW = 65;
   var KEYS = ['x', 'y', 'z', 'roll', 'pitch', 'yaw', 'body', 'ant_l', 'ant_r'];
   var STORE = 'reachy-gamepad-map:';
 
@@ -349,6 +352,7 @@
     post('/api/drive', { on: want }).then(function (r) {
       if (r && r.ok) {
         on = !!r.manual;
+        if (r.limits) LIMITS = r.limits;
         if (on) { target = r.target || target; lastSent = JSON.stringify(target); toast('Gamepad mode on'); loop(); }
         else toast('Gamepad mode off: Reachy holds the pose');
       } else toast((r && r.error) || 'Could not change gamepad mode', true);
@@ -400,6 +404,7 @@
             if (!v) return;
             Object.keys(a.keys).forEach(function (k) { target[k] = clamp(k, target[k] + v * a.keys[k] * a.rate * f * dt); });
           });
+          target.yaw = Math.min(target.body + MAX_REL_YAW, Math.max(target.body - MAX_REL_YAW, target.yaw));
         }
       }
     }

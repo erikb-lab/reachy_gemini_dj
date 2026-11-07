@@ -29,6 +29,7 @@ from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
+from .motor_health import MotorHealth
 from .gain import clamp_duck, clamp_volume
 from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
@@ -191,6 +192,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_said=self._set_said,
         )
         self._mini: ReachyMini | None = None
+        self.motor_health = MotorHealth()
         self.local_session = RemoteSession(
             config=self.config,
             execute_tool=self.gemini_session.execute_tool,
@@ -608,6 +610,32 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 return {"ok": True, **self.motion.drive_set(req.model_dump(exclude_none=True))}
             except Exception as e:
                 return {"ok": False, "manual": False, "error": str(e)}
+
+        # Motor health: hardware-error flags per motor, and "clear" = Dynamixel reboot of the faulty motors through
+        # the daemon's raw packet websocket (clears an Overload without a power cycle), then torque back on.
+        @app.get("/api/motors/health")
+        def motors_health():
+            try:
+                return {"ok": True, **self.motor_health.read()}
+            except Exception as e:
+                return {"ok": False, "error": f"Could not read the motors: {e}"[:200]}
+
+        @app.post("/api/motors/clear")
+        def motors_clear():
+            try:
+                res = self.motor_health.clear()
+            except Exception as e:
+                return {"ok": False, "error": f"Could not reach the motors: {e}"[:200]}
+            if res["cleared"] and self._mini is not None and not (self.motion and self.motion.learning):
+                try:
+                    self._mini.enable_motors()     # holds every motor where it is now (no snap)
+                except Exception as e:
+                    res["torque_error"] = str(e)[:160]
+            names = ", ".join(r["label"] for r in res["cleared"].values()) or "none"
+            self.record_event("error" if res["faults"] else "pose",
+                              f"Motor errors cleared: {names}" if not res["faults"] else
+                              "Could not clear: " + ", ".join(res["cleared"][n]["label"] for n in res["faults"]))
+            return {"ok": not res["faults"], **res}
 
         @app.post("/api/poses/save")
         def save_pose(req: PoseName):

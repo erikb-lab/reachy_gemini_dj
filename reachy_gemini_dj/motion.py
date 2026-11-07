@@ -68,15 +68,18 @@ THINK_TILT_S = 1.4        # slow on purpose
 # at a capped speed, so a dropped packet or a "centre" press can never make the robot jump.
 # Units: x/y/z in mm (x forward, y left, z up), angles in degrees (yaw + = left, pitch + = down, roll + = tilt right).
 DRIVE_KEYS = ("x", "y", "z", "roll", "pitch", "yaw", "body", "ant_l", "ant_r")
+# Official Reachy Mini limits (Pollen SDK docs "Core concepts" and the reachy_mini AGENTS.md): head pitch/roll
+# +-40 deg, head yaw +-180 deg, body yaw +-160 deg, head yaw at most 65 deg away from the body yaw.
+# Pollen publishes no antenna or head-translation range. Antennas use the extremes of Pollen's own recorded
+# emotions and dances (left -60..+194 deg, right -182..+60 deg); the old +-120 guess let the left antenna hit a stop
+# and trip its overload protection. Head translation stays small (no official figure).
 DRIVE_LIMITS = {"x": (-15.0, 15.0), "y": (-15.0, 15.0), "z": (-15.0, 20.0),
-                "roll": (-25.0, 25.0), "pitch": (-30.0, 30.0), "yaw": (-60.0, 60.0),
-                "body": (-150.0, 150.0),
-                # Antennas are asymmetric: across Pollen's recorded emotions and dances the left one stays within
-                # -60..+194 deg and the right one within -182..+60 deg. Past those it can hit a stop and the motor
-                # shuts itself off with an overload error, so stay well inside.
-                "ant_l": (-45.0, 150.0), "ant_r": (-150.0, 45.0)}
-DRIVE_SPEED = {"x": 60.0, "y": 60.0, "z": 60.0, "roll": 120.0, "pitch": 120.0, "yaw": 120.0,
-               "body": 90.0, "ant_l": 120.0, "ant_r": 120.0}   # max change per second
+                "roll": (-40.0, 40.0), "pitch": (-40.0, 40.0), "yaw": (-180.0, 180.0),
+                "body": (-160.0, 160.0),
+                "ant_l": (-60.0, 194.0), "ant_r": (-182.0, 60.0)}
+DRIVE_MAX_REL_YAW = 65.0  # |head yaw - body yaw|
+DRIVE_SPEED = {"x": 60.0, "y": 60.0, "z": 60.0, "roll": 120.0, "pitch": 120.0, "yaw": 90.0,
+               "body": 90.0, "ant_l": 120.0, "ant_r": 120.0}   # max change per second (head and body yaw equal)
 DRIVE_HZ = 50.0
 DRIVE_IDLE_S = 180.0      # no input for this long: leave manual mode (the robot keeps holding the pose)
 
@@ -118,6 +121,15 @@ def drive_clamp(target: dict) -> dict:
             continue
         lo, hi = DRIVE_LIMITS[k]
         out[k] = min(hi, max(lo, f))
+    return out
+
+
+def drive_relative(target: dict) -> dict:
+    """Keep the head yaw within DRIVE_MAX_REL_YAW of the body yaw (official limit), moving the head, not the body."""
+    out = dict(target)
+    if "yaw" in out and "body" in out:
+        lo, hi = out["body"] - DRIVE_MAX_REL_YAW, out["body"] + DRIVE_MAX_REL_YAW
+        out["yaw"] = min(hi, max(lo, out["yaw"]))
     return out
 
 
@@ -478,7 +490,7 @@ class Motion:
         pose = self._read_drive_pose(clamp=False)
         with self._lock:
             self._drive_cmd = dict(pose)               # where it really is (may be outside the safe range)...
-            self._drive_want = drive_clamp(pose)       # ...walked back inside at the capped speed, never jumped
+            self._drive_want = drive_relative(drive_clamp(pose))   # ...walked back inside at capped speed, never jumped
             self._drive_seen = time.monotonic()
             self._thinking = self._tilted = False
             self.manual = True
@@ -500,6 +512,7 @@ class Motion:
         clean = drive_clamp(target)
         with self._lock:
             self._drive_want.update(clean)
+            self._drive_want = drive_relative(self._drive_want)
             self._drive_seen = time.monotonic()
         return self.drive_state()
 

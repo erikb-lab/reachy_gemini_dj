@@ -53,7 +53,20 @@ def test_head_pose_translation_is_mm():
 
 def test_clamp_drops_junk_and_limits():
     out = mo.drive_clamp({"yaw": 500, "pitch": "-99", "roll": float("nan"), "z": None, "bogus": 3, "ant_l": "x"})
-    assert out == {"yaw": 60.0, "pitch": -30.0}
+    assert out == {"yaw": 180.0, "pitch": -40.0}
+
+
+def test_official_limits():
+    L = mo.DRIVE_LIMITS
+    assert L["pitch"] == (-40.0, 40.0) and L["roll"] == (-40.0, 40.0)
+    assert L["yaw"] == (-180.0, 180.0) and L["body"] == (-160.0, 160.0)
+    assert mo.DRIVE_MAX_REL_YAW == 65.0
+
+
+def test_head_yaw_stays_within_65_of_body():
+    assert mo.drive_relative({"yaw": 150.0, "body": 0.0})["yaw"] == 65.0
+    assert mo.drive_relative({"yaw": 150.0, "body": 100.0})["yaw"] == 150.0
+    assert mo.drive_relative({"yaw": -120.0, "body": 10.0})["yaw"] == -55.0
 
 
 def test_step_is_speed_capped():
@@ -79,15 +92,17 @@ def test_start_reads_present_pose(motion):
 
 
 def test_antenna_limits_match_pollens_range():
-    # Pollen's recorded moves keep the left antenna >= -60 deg and the right one <= +60 deg
-    assert mo.DRIVE_LIMITS["ant_l"][0] >= -60 and mo.DRIVE_LIMITS["ant_r"][1] <= 60
+    # no official antenna range: Pollen's recorded moves span left -60..194 deg and right -182..60 deg
+    assert mo.DRIVE_LIMITS["ant_l"] == (-60.0, 194.0) and mo.DRIVE_LIMITS["ant_r"] == (-182.0, 60.0)
 
 
 def test_start_outside_range_walks_back_without_a_jump(motion):
     motion.mini.get_current_joint_positions = lambda: ([0.0] * 7, [0.0, math.radians(-100)])   # left antenna past its stop
     st = motion.drive_start()
     assert st["target"]["ant_l"] == mo.DRIVE_LIMITS["ant_l"][0]
-    time.sleep(0.1)
+    deadline = time.time() + 2
+    while not motion.mini.targets and time.time() < deadline:   # the drive loop may be mid-sleep
+        time.sleep(0.02)
     motion.drive_stop()
     first = motion.mini.targets[0][1]                 # [right, left] in radians
     assert math.degrees(first[1]) < mo.DRIVE_LIMITS["ant_l"][0] - 30   # first command is near -100, not the limit
@@ -107,7 +122,7 @@ def test_loop_streams_towards_target(motion):
     head, ants, body = motion.mini.targets[-1]
     assert head.shape == (4, 4) and len(ants) == 2 and isinstance(body, float)
     _, _, yaw = mo.matrix_to_rpy(head)
-    assert -60 <= yaw < 20                            # moving down from 20 at <= 120 deg/s, not jumped to -60
+    assert -60 <= yaw < 20                            # moving down from 20 at capped speed, not jumped to -60
     assert yaw > 20 - mo.DRIVE_SPEED["yaw"] * 0.6
 
 
