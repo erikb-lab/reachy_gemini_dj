@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types
 
 from .gain import percent_to_volume, volume_to_percent
+from .music import speakable
 from .memory import live_instruction_line
 
 log = logging.getLogger(__name__)
@@ -36,11 +37,54 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         # Music Tools
         types.FunctionDeclaration(
             name="play_music",
-            description="Search and play a song, genre, artist, or playlist.",
+            description="Play or queue music for a song, artist, genre or playlist.",
             parameters=types.Schema(
                 type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="The song, artist, or music genre to play.")},
+                properties={
+                    "query": types.Schema(type="STRING", description="Song, artist or genre."),
+                    "count": types.Schema(type="INTEGER", description="How many different songs, 1-10.", minimum=1, maximum=10),
+                    "when": types.Schema(type="STRING", enum=["now", "next", "last"], description="now = play immediately, next = after this song, last = end of queue (default)."),
+                },
                 required=["query"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="music_queue",
+            description="Show or change the music queue.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "action": types.Schema(type="STRING", enum=["now_playing", "list", "clear", "shuffle", "remove", "autoplay_on", "autoplay_off"]),
+                    "which": types.Schema(type="STRING", description="For remove: position, next, last or title words."),
+                },
+                required=["action"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="seek_music",
+            description="Jump within the current song.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"to": types.Schema(type="STRING", description="Time like 1:30, +30, back 15 seconds, or start.")},
+                required=["to"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="adjust_volume",
+            description="Make the music a bit louder or quieter.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"direction": types.Schema(type="STRING", enum=["up", "down"])},
+                required=["direction"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="favorite_song",
+            description="Save the current song, play, or list favorites.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"action": types.Schema(type="STRING", enum=["save", "play", "list"])},
+                required=["action"],
             ),
         ),
         types.FunctionDeclaration(
@@ -567,7 +611,20 @@ class GeminiSession:
         try:
             # Music
             if name == "play_music":
-                return self.music.play(args.get("query", ""))
+                return speakable(self.music.play(args.get("query", ""), args.get("count", 1), args.get("when", "")))
+            elif name == "music_queue":
+                res = self.music.queue_action(args.get("action", ""), args.get("which", ""))
+                self.config.music_autoplay = self.music.autoplay
+                return speakable(res)
+            elif name == "seek_music":
+                return speakable(self.music.seek(args.get("to", "")))
+            elif name == "adjust_volume":
+                res = self.music.adjust_volume(args.get("direction", ""))
+                if "volume" in res:
+                    self.config.music_volume = res["volume"]
+                return speakable(res)
+            elif name == "favorite_song":
+                return speakable(self.music.favorite(args.get("action", "")))
             elif name == "pause_music":
                 return self.music.pause()
             elif name == "resume_music":
