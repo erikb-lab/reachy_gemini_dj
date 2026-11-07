@@ -414,20 +414,22 @@ class BrainSession:
             return
         self._state("loading", "warming up the language model")
         t0 = time.time()
-        fname = f"warm-{key[:16]}.bin"
+        # The saved file is named after system prompt + tools only (the slow ~2k-token part). Remembered facts come
+        # after them, so a file saved with older facts still covers that prefix: llama-server re-reads only the rest.
+        base = hashlib.sha1(json.dumps([self._system(), self._tools()], sort_keys=True).encode()).hexdigest()
+        fname = f"warm-{base[:16]}.bin"
+        restored = False
         try:
-            if hasattr(self.llm, "slot_restore") and self.llm.slot_restore(fname):
-                self.llm.warm_key = key
+            restored = bool(hasattr(self.llm, "slot_restore") and self.llm.slot_restore(fname))
+            if restored:
                 log.info("LLM prompt cache restored from disk in %.1fs", time.time() - t0)
-                self._state("listening")
-                return
         except Exception as e:
             log.info("prompt cache restore failed: %s", e)
         try:
             msgs = [{"role": "system", "content": self._system()}, *self._pinned(), {"role": "user", "content": "hi"}]
             self.llm.chat_stream(msgs, self._tools(), lambda c: None, threading.Event(), max_tokens=1)
             self.llm.warm_key = key
-            log.info("LLM warm-up took %.1fs", time.time() - t0)
+            log.info("LLM warm-up took %.1fs%s", time.time() - t0, " (after restore)" if restored else "")
         except Exception as e:
             log.warning("LLM warm-up failed: %s", e)
         else:

@@ -478,10 +478,20 @@ def test_warm_restores_from_slot_cache_else_warms_and_saves():
         s.on_hello({"tools": []})
         time.sleep(0.3)
         assert llm.restored and llm.restored[0].startswith("warm-") and llm.restored[0].endswith(".bin")
-        assert getattr(llm, "warmups", 0) == (0 if ok else 1)
-        assert llm.saved == ([] if ok else llm.restored)
+        assert getattr(llm, "warmups", 0) == 1      # after a restore this only reads the remembered facts
+        assert llm.saved == llm.restored
         assert llm.warm_key
         s.close()
+    # the saved file is named after system prompt + tools, so new facts reuse it instead of a full warm-up
+    names = []
+    for facts in ([], ["our pit is A3"], ["our pit is B7", "robot is Zippy"]):
+        llm = SlotLLM(True)
+        s = BrainSession(BrainConfig(), llm, FakeSTT("x"), FakeTTS(), lambda m: None, lambda b: None)
+        s.on_hello({"tools": [], "memory": facts})
+        time.sleep(0.3)
+        names.append(llm.restored[0])
+        s.close()
+    assert len(set(names)) == 1
 
 
 def test_warm_survives_slot_errors():
