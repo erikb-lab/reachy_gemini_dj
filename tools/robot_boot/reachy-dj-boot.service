@@ -1,0 +1,20 @@
+# systemd SYSTEM unit for the robot (Reachy Mini, user pollen): at boot, update Reachy Gemini DJ from its Hugging Face
+# Space if a newer version is there, otherwise just start the installed one. Installed by tools/robot_boot/install.sh.
+# Logs:  journalctl -u reachy-dj-boot -b
+# Pause updates (e.g. while hot-copying dev builds):  touch ~/.reachy_dj_boot/no-update
+[Unit]
+Description=Reachy Gemini DJ: update from the Space if newer, then start
+After=reachy-mini-daemon.service network-online.target
+Wants=reachy-mini-daemon.service network-online.target
+
+[Service]
+Type=oneshot
+User=pollen
+ExecStart=/usr/bin/python3 /home/pollen/.reachy_dj_boot/reachy_dj_boot.py
+# daemon wait (5 min) + internet wait (90 s) + update job (20 min) + start (90 s), with room to spare
+TimeoutStartSec=35min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
