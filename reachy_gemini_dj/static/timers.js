@@ -8,12 +8,13 @@
 
   var css = document.createElement('style');
   css.textContent =
-    '.tm-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}' +
-    '.tm-list li{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)}' +
-    '.tm-list li:first-child{border-top:0}.tm-list .tm-t{min-width:0;overflow-wrap:anywhere}' +
-    '.tm-list small{display:block;color:var(--mut)}.tm-list .tm-left{font-weight:800;font-variant-numeric:tabular-nums}' +
+    '.tm-list{list-style:none;margin:0;padding:0}' +
+    '.tm-list li{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}' +
+    '.tm-list li:first-child{border-top:0;padding-top:0}.tm-list li:last-child{padding-bottom:0}.tm-list .tm-t{min-width:0;overflow-wrap:anywhere;font-size:14.5px}' +
+    '.tm-list small{display:block;color:var(--mut);font-size:13px}.tm-list .tm-left{font-weight:700;font-size:15px;font-variant-numeric:tabular-nums}' +
+    '.tm-list .row{flex-wrap:nowrap;gap:12px}.tm-list .btn{min-height:36px;padding:0 12px}' +
     '.tm-list li.ring .tm-left{color:var(--bad)}.tm-list .empty{color:var(--mut);border:0}' +
-    '#tm-stop{width:100%;margin-bottom:10px}';
+    '#tm-stop{width:100%;margin-bottom:12px}';
   document.head.appendChild(css);
 
   var card = document.createElement('section');
