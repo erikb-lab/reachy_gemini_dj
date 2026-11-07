@@ -45,6 +45,13 @@ class Config:
     greet_on_start: bool = True   # say "I'm ready." once when the voice backend first becomes ready after app start
     imu_reactions: bool = True    # speak / react when picked up, set down, bumped, shaken or tipped over (imu.py)
     timezone: str = ""            # IANA zone for alarms, e.g. "America/Chicago"; filled from the controller page
+    # Music EQ, dB per band (-12..+12): bass ~100 Hz shelf, mid ~1 kHz peak, treble ~6 kHz shelf (music.py / gain.py)
+    music_eq_bass: float = 0.0
+    music_eq_mid: float = 0.0
+    music_eq_treble: float = 0.0
+    # Experimental (Settings > Experimental)
+    gamepad_enabled: bool = False   # gamepad mode on the Robot tab (drive the motors with a game controller)
+    gamepad_speed: float = 1.0      # gamepad speed multiplier 0.25..2.0 (applied on the page)
 
     @property
     def effective_model(self) -> str:

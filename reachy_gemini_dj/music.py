@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 STREAM_TTL = 4 * 3600          # resolved stream URLs expire; re-resolve when older than this
 MAX_TRACK_S = 15 * 60          # skip longer videos unless the query asks for a mix/playlist/live
 RECENT_MAX = 50
+EQ_DEBOUNCE_S = 0.4            # coalesce EQ slider drags into one stream restart
 VOLUME_STEP = 0.15             # adjust_volume: 15 percentage points
 _LONG_OK = re.compile(r"\b(mix|playlist|live|album|hours?|full|set|radio|stream|compilation)\b", re.I)
 _ids = itertools.count(1)
@@ -71,6 +72,8 @@ class MusicPlayer:
         self._current_item: dict[str, Any] | None = None
         self._current_info: dict[str, Any] | None = None
         self._seek_req: float | None = None
+        self._eq: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._eq_timer: threading.Timer | None = None
         # Autoplay: after the queue runs dry, keep going with results related to the last request.
         self.autoplay = bool(autoplay)
         self._auto_active = False       # a request is "live" (cleared by stop / clear)
@@ -118,6 +121,48 @@ class MusicPlayer:
         """Set music volume (linear multiplier 0.0-2.5); applied live, ramped smoothly."""
         with self._lock:
             self._volume = _gain.clamp_volume(volume)
+
+    def set_eq(self, bass_db: float, mid_db: float, treble_db: float) -> None:
+        """Music EQ in dB per band (clamped to -12..+12).
+
+        Applies to every future song at once.  If a song is playing/paused and the EQ really
+        changed, the same stream is restarted at the current position after a short debounce
+        (dragging a slider must not restart ffmpeg many times a second).
+        """
+        eq = (_gain.clamp_eq(bass_db), _gain.clamp_eq(mid_db), _gain.clamp_eq(treble_db))
+        with self._lock:
+            if eq == self._eq:
+                return
+            self._eq = eq
+            if self._state not in ("playing", "paused"):
+                return
+            if self._eq_timer is not None:
+                self._eq_timer.cancel()
+            self._eq_timer = threading.Timer(EQ_DEBOUNCE_S, self._apply_eq_now)
+            self._eq_timer.daemon = True
+            self._eq_timer.start()
+
+    def _apply_eq_now(self) -> None:
+        """Restart the current stream at the current position so the new EQ filter takes effect."""
+        with self._cond:
+            self._eq_timer = None
+            proc, state, info = self._proc, self._state, self._current_info
+            if state not in ("playing", "paused") or proc is None or info is None:
+                return  # nothing playing (anymore): the new EQ is picked up by the next song
+            if state == "playing":
+                cur = self._elapsed_paused + (time.time() - self._start_time)
+            else:
+                cur = self._elapsed_paused
+            if self._is_live:
+                cur = 0.0  # a live stream has no position to return to
+            elif self._duration:
+                cur = min(cur, max(0.0, self._duration - 1.0))
+            self._seek_req = max(0.0, cur)
+            self._seek_paused = state == "paused"
+            self._state = "loading"
+            self._elapsed_paused = self._seek_req
+            self._proc = None
+        self._terminate_proc(proc)
 
     def set_duck(self, duck_level: float) -> None:
         """Duck music to this fraction (0.0-1.0) of volume; fades in over ~80 ms."""
@@ -764,7 +809,7 @@ class MusicPlayer:
             decoder = None
             try:
                 decoder = subprocess.Popen(
-                    _gain.decoder_command(stream_url, headers, start),
+                    _gain.decoder_command(stream_url, headers, start, self._eq),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # loglevel warning: little output
                 )
                 _gain.shrink_pipe(decoder.stdout, 16384)
@@ -794,6 +839,7 @@ class MusicPlayer:
             pump = _gain.GainPump(
                 decoder.stdout, proc.stdin, self._target_gain,
                 initial_gain=self._volume * self._duck_factor,
+                max_lead_s=_gain.PUMP_LEAD_S,
             )
             log.info("Starting playback for %s from %.0fs (gain=%.2fx)", title, start, pump.gain)
         pump_thread = threading.Thread(target=pump.run, daemon=True, name="music-gain")

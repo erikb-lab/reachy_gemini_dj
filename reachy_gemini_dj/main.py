@@ -29,6 +29,7 @@ from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
+from .motor_health import MotorHealth
 from .gain import clamp_duck, clamp_volume
 from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
@@ -69,8 +70,15 @@ class ConfigUpdate(BaseModel):
     timezone: str | None = None             # IANA name, sent by the controller page
     greet_on_start: bool | None = None
     imu_reactions: bool | None = None
+    music_eq_bass: float | None = None
+    music_eq_mid: float | None = None
+    music_eq_treble: float | None = None
+    gamepad_enabled: bool | None = None
+    gamepad_speed: float | None = None
 
 
+EQ_KEYS = ("music_eq_bass", "music_eq_mid", "music_eq_treble")
+EQ_RANGE_DB = 12.0
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
 VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
 
@@ -131,6 +139,23 @@ class LearnToggle(BaseModel):
     on: bool
 
 
+class DriveToggle(BaseModel):
+    on: bool
+
+
+class DriveTarget(BaseModel):
+    """Gamepad drive target: mm for x/y/z, degrees for the rest; missing values are left as they are."""
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    roll: float | None = None
+    pitch: float | None = None
+    yaw: float | None = None
+    body: float | None = None
+    ant_l: float | None = None
+    ant_r: float | None = None
+
+
 class GoogleClientUpdate(BaseModel):
     client_id: str
     client_secret: str
@@ -160,6 +185,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
 
         # Subsystems initialized at startup
         self.music = MusicPlayer(volume=self.config.music_volume, autoplay=self.config.music_autoplay)
+        self.music.set_eq(self.config.music_eq_bass, self.config.music_eq_mid, self.config.music_eq_treble)
         self.motion: Motion | None = None
         self.audio_pipe: AudioPipeline | None = None
         self.gemini_session = GeminiSession(
@@ -174,6 +200,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             on_said=self._set_said,
         )
         self._mini: ReachyMini | None = None
+        self.motor_health = MotorHealth()
         self.local_session = RemoteSession(
             config=self.config,
             execute_tool=self.gemini_session.execute_tool,
@@ -329,7 +356,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.6.1",
+                "version": "0.7.0",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
@@ -362,6 +389,11 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "timezone": self.config.timezone,
                     "greet_on_start": self.config.greet_on_start,
                     "imu_reactions": self.config.imu_reactions,
+                    "music_eq_bass": self.config.music_eq_bass,
+                    "music_eq_mid": self.config.music_eq_mid,
+                    "music_eq_treble": self.config.music_eq_treble,
+                    "gamepad_enabled": self.config.gamepad_enabled,
+                    "gamepad_speed": self.config.gamepad_speed,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
@@ -403,12 +435,21 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:
                 d["duck_level"] = clamp_duck(d["duck_level"])
+            for k in EQ_KEYS:
+                if d.get(k) is not None:
+                    d[k] = round(max(-EQ_RANGE_DB, min(EQ_RANGE_DB, float(d[k]))), 1)
+            if d.get("gamepad_speed") is not None:
+                d["gamepad_speed"] = round(max(0.25, min(2.0, float(d["gamepad_speed"]))), 2)
             for k, v in d.items():
                 if hasattr(self.config, k):
                     setattr(self.config, k, v)
             self.config.save()
             self.music.set_volume(self.config.music_volume)
             self.music.autoplay = bool(self.config.music_autoplay)
+            if any(k in d for k in EQ_KEYS):
+                self.music.set_eq(self.config.music_eq_bass, self.config.music_eq_mid, self.config.music_eq_treble)
+            if d.get("gamepad_enabled") is False and self.motion and self.motion.manual:
+                self.motion.drive_stop()
             if d.get("hw_speaker_percent") is not None:
                 set_hw_speaker_level(self.config.hw_speaker_percent)
             if (VOICE_KEYS | FRC_KEYS) & d.keys():
@@ -568,6 +609,58 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception as e:
                 return {"ok": False, "error": str(e)}
 
+        # Gamepad mode: the page reads a controller (Gamepad API) and streams a target pose; motion.py moves the
+        # motors there at a capped speed and pauses every other move while it is on.
+        @app.post("/api/drive")
+        def drive_toggle(req: DriveToggle):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            if req.on and not self.config.gamepad_enabled:
+                return {"ok": False, "error": "Gamepad mode is off: turn it on in Settings > Experimental."}
+            if req.on and not self.config.motion_enabled:
+                return {"ok": False, "error": "Robot movement is turned off in Settings."}
+            try:
+                res = self.motion.drive_start() if req.on else self.motion.drive_stop()
+                self.record_event("pose", "Gamepad mode on" if req.on else "Gamepad mode off")
+                return {"ok": True, **res}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+
+        @app.post("/api/drive/target")
+        def drive_target(req: DriveTarget):
+            if not self.motion:
+                return {"ok": False, "error": "Robot motion subsystem not ready"}
+            try:
+                return {"ok": True, **self.motion.drive_set(req.model_dump(exclude_none=True))}
+            except Exception as e:
+                return {"ok": False, "manual": False, "error": str(e)}
+
+        # Motor health: hardware-error flags per motor, and "clear" = Dynamixel reboot of the faulty motors through
+        # the daemon's raw packet websocket (clears an Overload without a power cycle), then torque back on.
+        @app.get("/api/motors/health")
+        def motors_health():
+            try:
+                return {"ok": True, **self.motor_health.read()}
+            except Exception as e:
+                return {"ok": False, "error": f"Could not read the motors: {e}"[:200]}
+
+        @app.post("/api/motors/clear")
+        def motors_clear():
+            try:
+                res = self.motor_health.clear()
+            except Exception as e:
+                return {"ok": False, "error": f"Could not reach the motors: {e}"[:200]}
+            if res["cleared"] and self._mini is not None and not (self.motion and self.motion.learning):
+                try:
+                    self._mini.enable_motors()     # holds every motor where it is now (no snap)
+                except Exception as e:
+                    res["torque_error"] = str(e)[:160]
+            names = ", ".join(r["label"] for r in res["cleared"].values()) or "none"
+            self.record_event("error" if res["faults"] else "pose",
+                              f"Motor errors cleared: {names}" if not res["faults"] else
+                              "Could not clear: " + ", ".join(res["cleared"][n]["label"] for n in res["faults"]))
+            return {"ok": not res["faults"], **res}
+
         @app.post("/api/poses/save")
         def save_pose(req: PoseName):
             if not self.motion:
@@ -688,7 +781,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                                 frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.6.1...")
+        log.info("Starting Reachy Gemini DJ v0.7.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot

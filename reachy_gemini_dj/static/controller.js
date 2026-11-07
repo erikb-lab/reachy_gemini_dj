@@ -85,9 +85,9 @@ const SL = { music_volume: v => Math.round(v * 100) + '%', duck_level: v => Math
 /* Sliders apply while dragging (throttled), not only on release */
 const liveTimers = {};
 function applyLive(key, val) {
+  liveVal[key] = val;                      // always remember the latest value (trailing send)
   if (liveTimers[key]) return;
   liveTimers[key] = setTimeout(() => { delete liveTimers[key]; api('/api/config', { [key]: +liveVal[key] }).catch(() => {}); }, 120);
-  liveVal[key] = val;
 }
 const liveVal = {};
 Object.keys(SL).forEach(id => {

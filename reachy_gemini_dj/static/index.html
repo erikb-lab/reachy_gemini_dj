@@ -46,16 +46,16 @@
         <div class="prog" role="progressbar" aria-label="Track progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progbar"><i id="prog"></i></div>
         <div class="times"><span id="t-el">0:00</span><span id="t-du">0:00</span></div>
         <div class="transport">
-          <button class="tbtn" id="b-stop" aria-label="Stop" title="Stop">&#9632;</button>
+          <button class="tbtn" id="b-stop" aria-label="Stop" title="Stop"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></button>
           <button class="tbtn main" id="b-play" aria-label="Play" title="Play / pause">&#9654;</button>
-          <button class="tbtn" id="b-skip" aria-label="Skip to next" title="Skip">&#9197;</button>
+          <button class="tbtn" id="b-skip" aria-label="Skip to next" title="Skip"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l10 7-10 7z"/><rect x="16" y="5" width="3" height="14" rx="1"/></svg></button>
         </div>
-        <div class="vol">
+        <div class="vol" data-label="Music volume">
           <span class="i" aria-hidden="true">&#128266;</span>
           <input type="range" id="music_volume" min="0" max="2.5" step="0.05" aria-label="Music volume">
           <output id="o-vol" for="music_volume">0%</output>
         </div>
-        <div class="vol" title="How loud Reachy's own voice is (separate from the music)">
+        <div class="vol" data-label="Reachy voice" title="How loud Reachy's own voice is (separate from the music)">
           <span class="i" aria-hidden="true">&#128483;</span>
           <input type="range" id="voice_gain_q" min="0.2" max="2.5" step="0.05" aria-label="Reachy voice volume">
           <output id="o-vg" for="voice_gain_q">0</output>
@@ -65,7 +65,7 @@
 
       <section class="card" aria-labelledby="h-mic">
         <h2 id="h-mic">Microphone</h2>
-        <button class="btn mute" id="b-mute" aria-pressed="false">Mute mic</button>
+        <button class="btn quiet mute" id="b-mute" aria-pressed="false">Mute mic</button>
         <div class="meter" id="meter" role="meter" aria-label="Microphone level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="lvl"></i></div>
         <div class="bubble u"><small>Heard</small><span class="txt" id="heard"></span></div>
         <div class="bubble r"><small>Said</small><span class="txt" id="said"></span></div>
@@ -191,6 +191,12 @@
 <script src="/static/ptt.js" defer></script>
 <script src="/static/qol.js" defer></script>
 <script src="/static/imu.js" defer></script>
+<script src="/static/gamepad.js" defer></script>
+<script src="/static/motors.js" defer></script>
+<script src="/static/eq.js" defer></script>
+<script src="/static/experimental.js" defer></script>
+<script src="/static/settings-nav.js" defer></script>
+<link rel="stylesheet" href="/static/settings-tab.css">
 <link rel="stylesheet" href="/static/layout.css">
 <script src="/static/layout.js" defer></script>
 <script>

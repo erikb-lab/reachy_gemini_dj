@@ -9,9 +9,9 @@
 
   var css = document.createElement('style');
   css.textContent =
-    '.im-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin:0}' +
-    '.im-grid div{display:grid;gap:2px}.im-grid dt{color:var(--mut);font-size:12.5px}' +
-    '.im-grid dd{margin:0;font-weight:800;font-variant-numeric:tabular-nums}' +
+    '.im-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin:0}' +
+    '.im-grid div{display:grid;gap:2px}.im-grid dt{color:var(--mut);font-size:13px}' +
+    '.im-grid dd{margin:0;font-weight:700;font-size:15px;font-variant-numeric:tabular-nums}' +
     '.im-grid dd.hot{color:var(--warn)}.im-none{color:var(--mut);margin:0}';
   document.head.appendChild(css);
 

@@ -10,11 +10,11 @@
 
   var css = document.createElement('style');
   css.textContent =
-    '.mq-bar{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}.mq-bar .btn{min-height:40px;padding:0 12px;font-size:.9rem}' +
-    '.mq-list{list-style:none;margin:0;padding:0}.mq-list li{display:flex;gap:6px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}' +
-    '.mq-list li:first-child{border-top:0}.mq-t{flex:1;min-width:0;overflow-wrap:anywhere}.mq-t small{display:block;color:var(--mut)}' +
-    '.mq-list .btn{min-width:40px;min-height:36px;padding:0 10px}.mq-list .empty{color:var(--mut);border:0}' +
-    '.mq-h{margin:14px 0 4px;font-size:.95rem;color:var(--mut)}#progbar{cursor:pointer}';
+    '.mq-bar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 8px}.mq-bar .btn{min-height:36px;padding:0 12px}' +
+    '.mq-list{list-style:none;margin:0;padding:0}.mq-list li{display:flex;gap:8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}' +
+    '.mq-list li:first-child{border-top:0}.mq-t{flex:1;min-width:0;overflow-wrap:anywhere;font-size:14.5px}.mq-t small{display:block;color:var(--mut);font-size:13px}' +
+    '.mq-list .btn{min-width:36px;min-height:36px;padding:0 10px}.mq-list .empty{color:var(--mut);border:0}' +
+    '.mq-h{margin:18px 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}#progbar{cursor:pointer}';
   document.head.appendChild(css);
 
   var card = document.createElement('section');

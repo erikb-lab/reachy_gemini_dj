@@ -6,7 +6,7 @@
 /* ---------- shared ---------- */
 .col{display:flex;flex-direction:column;gap:16px;min-width:0}
 #p-dj .grid{align-items:start}
-.ptt-btn{min-height:110px}
+.ptt-btn{min-height:88px}
 
 /* ---------- desktop ---------- */
 @media (min-width:1280px){
@@ -44,11 +44,12 @@
   .brand .sr{display:none}
   .stat{font-size:12.5px;padding:3px 9px;flex:0 0 auto}
   #st-model{display:none}
-  #theme-btn{margin-left:auto;flex:0 0 auto;min-height:32px;padding:2px 10px;font-size:.8rem;
+  #theme-btn{margin-left:auto;flex:0 0 auto;min-height:32px;padding:2px 10px;font-size:12.5px;background:var(--card);
     position:sticky;right:0;box-shadow:-10px 0 10px var(--card)}
 
   .wrap{padding:0 12px}
-  .card{padding:14px;border-radius:16px}
+  :root{--tap:44px}
+  .card{padding:14px}
   #p-dj .grid{gap:12px}
   .col{display:contents}
 
@@ -62,27 +63,24 @@
   #p-dj section[aria-labelledby="h-im"]{order:7}
   #p-dj section[aria-labelledby="h-ev"]{order:8}
 
-  .disc{width:64px;height:64px;flex-basis:64px;font-size:30px;border-radius:16px}
-  .np-t{font-size:19px}
-  .tbtn{width:52px;height:52px}
-  .tbtn.main{width:66px;height:66px;font-size:28px}
-  .transport{margin:10px 0}
+  .disc{width:60px;height:60px;flex-basis:60px;font-size:28px}
+  .np-t{font-size:18px}
 
   /* tabs become a bottom bar */
-  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;margin:0;gap:6px;
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;margin:0;gap:4px;border-radius:0;border:0;
     padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--card);
     border-top:1px solid var(--line);box-shadow:0 -6px 20px rgba(0,0,0,.18)}
-  .tabs button{flex:1 1 0;min-height:48px;padding:0 8px}
+  .tabs button{flex:1 1 0;min-height:44px;padding:0 8px;border-radius:var(--rc);background:var(--bg)}
   .tabpanel{padding:12px 0 calc(84px + env(safe-area-inset-bottom))}
 
   /* hold-to-talk docked just above the bottom bar */
   .ptt-card{position:fixed;left:12px;right:12px;bottom:calc(72px + env(safe-area-inset-bottom));z-index:29;
     padding:0;border:0;background:transparent;box-shadow:none}
   .ptt-card h2,.ptt-card .ptt-hint{display:none}
-  .ptt-btn{min-height:64px;flex-direction:row;gap:10px;font-size:1.15rem;border-radius:16px;
+  .ptt-btn{min-height:56px;flex-direction:row;gap:10px;font-size:1.05rem;border-radius:var(--r);
     background:var(--card);box-shadow:0 6px 22px rgba(0,0,0,.3)}
-  .ptt-btn:not(.live){background:var(--soft)}
-  .ptt-ic{font-size:1.6rem}
+  .ptt-btn:not(.live){background:var(--card)}
+  .ptt-ic{font-size:1.4rem}
   body:has(.ptt-card:not(.hide)) #p-dj{padding-bottom:calc(160px + env(safe-area-inset-bottom))}
 
   /* toasts sit above the docked controls */

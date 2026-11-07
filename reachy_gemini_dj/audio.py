@@ -227,6 +227,7 @@ class AudioPipeline:
         # Audio state
         self._muted = False
         self._user_speaking = False
+        self._duck_mode_seen = self.listen_mode
         self._last_user_speech = -1e9        # "never": monotonic() is time since boot, so 0.0 would look recent
 
         # Adaptive noise floor & echo suppression
@@ -262,6 +263,21 @@ class AudioPipeline:
     def ptt_active(self) -> bool:
         return self.listen_mode == "push_to_talk" and self._ptt.active
 
+    def _duck_wanted(self) -> bool:
+        """Push-to-talk: duck only while talk is held or the robot speaks (ambient noise never ducks).
+        Always-listening: duck while the VAD hears the user or the robot speaks."""
+        if self._is_robot_speaking:
+            return True
+        if self.listen_mode == "push_to_talk":
+            return self._ptt.active
+        return self._user_speaking
+
+    def _update_duck(self) -> None:
+        if self._duck_wanted():
+            self.music.set_duck(self.config.duck_level)
+        else:
+            self.music.reset_duck()
+
     def _talk_pressed(self) -> None:
         """Pressing talk while the robot speaks is a barge-in; then tell the optional hook (alarm dismiss etc.)."""
         if self._is_robot_speaking:
@@ -280,12 +296,10 @@ class AudioPipeline:
             new = self._ptt.press() if self.listen_mode == "push_to_talk" else True
             if new:
                 self._talk_pressed()
-                if self.listen_mode == "push_to_talk":
-                    self.music.set_duck(self.config.duck_level)
+                self._update_duck()
         else:
             self._ptt.release()
-            if not self._user_speaking and not self._is_robot_speaking:
-                self.music.reset_duck()
+            self._update_duck()
         return self.ptt_active
 
     def ptt_toggle(self) -> bool:
@@ -305,15 +319,14 @@ class AudioPipeline:
             self._voice_queue.append(arr)
             self._is_robot_speaking = True
         # Duck music while robot is speaking
-        self.music.set_duck(self.config.duck_level)
+        self._update_duck()
 
     def clear_voice(self) -> None:
         """Clear playback queue immediately on barge-in / interruption."""
         with self._voice_lock:
             self._voice_queue.clear()
             self._is_robot_speaking = False
-        if not self._user_speaking:
-            self.music.reset_duck()
+        self._update_duck()
 
     def start(self) -> None:
         log.info("Hardware speaker: %s", set_hw_speaker_level(getattr(self.config, "hw_speaker_percent", 100)))
@@ -404,11 +417,14 @@ class AudioPipeline:
                 if is_speech:
                     self._user_speaking = True
                     self._last_user_speech = now + 0.7  # Hangover time
-                    self.music.set_duck(self.config.duck_level)
+                    self._update_duck()                 # push-to-talk: only ducks if talk is held / robot speaks
                 elif self._user_speaking and now > self._last_user_speech:
                     self._user_speaking = False
-                    if not self._is_robot_speaking:
-                        self.music.reset_duck()
+                    self._update_duck()
+                mode_now = self.listen_mode
+                if mode_now != self._duck_mode_seen:
+                    self._duck_mode_seen = mode_now     # mode switched: re-evaluate so nothing stays ducked
+                    self._update_duck()
 
                 # Push-to-talk: only frames the gate lets through are sent ("always" mode skips this block)
                 ptt_on = self.listen_mode == "push_to_talk"
@@ -420,8 +436,8 @@ class AudioPipeline:
                     for chunk in self._ptt.process(raw):
                         self.on_pcm_chunk(chunk)
                     held = self._ptt.active
-                    if self._ptt_was_held and not held and not self._user_speaking and not self._is_robot_speaking:
-                        self.music.reset_duck()        # released by the 30 s safety, not by the button
+                    if self._ptt_was_held and not held:
+                        self._update_duck()        # released by the 30 s safety, not by the button
                     self._ptt_was_held = held
                 # Stream audio to Gemini Live if callback registered
                 elif self.on_pcm_chunk:
@@ -460,8 +476,7 @@ class AudioPipeline:
                 else:
                     if self._is_robot_speaking:
                         self._is_robot_speaking = False
-                        if not self._user_speaking:
-                            self.music.reset_duck()
+                        self._update_duck()
 
             if frame is None:
                 time.sleep(0.01)

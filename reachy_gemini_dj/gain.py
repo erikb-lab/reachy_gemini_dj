@@ -23,9 +23,9 @@ from __future__ import annotations
 
 import functools
 import logging
-import functools
 import re
 import subprocess
+import time
 from typing import BinaryIO, Callable
 
 import numpy as np
@@ -39,6 +39,13 @@ DEFAULT_VOLUME = 1.0
 SAMPLE_RATE = 44100
 CHANNELS = 2
 BLOCK_MS = 20  # gain is re-evaluated and ramped once per block
+
+# How far (seconds) the pump may run ahead of real time.  This bounds the extra
+# audio queued in ffplay/pipes, i.e. the delay before a volume change is heard.
+# 250 ms (~12 blocks) leaves enough cushion against scheduler jitter on a Pi CM4
+# without the ~1 s read-ahead ffplay otherwise builds up; ffplay flags are
+# deliberately untouched (cannot be verified offline without an audio device).
+PUMP_LEAD_S = 0.25
 
 # Duck envelope: how long (seconds) a full 0 -> 1 gain swing takes.
 ATTACK_S = 0.08   # gain falling (duck in): fast so speech is clear
@@ -134,7 +141,15 @@ class GainPump:
         channels: int = CHANNELS,
         block_ms: int = BLOCK_MS,
         initial_gain: float | None = None,
+        max_lead_s: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
+        self.max_lead_s = max_lead_s
+        self._clock = clock
+        self._sleep = sleep
+        self._t0: float | None = None   # wall-clock anchor of the pacing timeline
+        self._sent_s = 0.0              # seconds of audio written since the anchor
         self.src = src
         self.dst = dst
         self.get_target = get_target
@@ -151,6 +166,29 @@ class GainPump:
         self.gain = g1
         return apply_gain(pcm, g0, g1, self.channels)
 
+    def _pace(self, n_bytes: int) -> None:
+        """Keep the audio we have written at most ``max_lead_s`` ahead of real time.
+
+        Latency finding: ffmpeg decodes far faster than real time, so without
+        pacing ffplay's demuxer queue (it reads ahead until it holds roughly a
+        second of packets) plus the pipes fill up, and a gain change is only
+        heard after ~1 s of already-queued audio drains.  Pacing the pump to the
+        playback clock keeps the queued audio (= gain latency) to ~max_lead_s.
+        After a pause (SIGSTOP on ffplay blocks the write) or a stall we are
+        behind the clock; re-anchor instead of bursting to catch up.
+        """
+        if self.max_lead_s is None:
+            return
+        now = self._clock()
+        if self._t0 is None:
+            self._t0 = now
+        ahead = self._sent_s - (now - self._t0)
+        if ahead < 0:
+            self._t0, ahead = now - self._sent_s, 0.0
+        if ahead > self.max_lead_s:
+            self._sleep(ahead - self.max_lead_s)
+        self._sent_s += n_bytes / (2 * self.channels * self.sample_rate)
+
     def run(self) -> None:
         try:
             while True:
@@ -159,6 +197,7 @@ class GainPump:
                     break
                 out = self.process_block(buf)
                 if out:
+                    self._pace(len(out))
                     self.dst.write(out)
                     self.dst.flush()
         except (BrokenPipeError, ValueError, OSError):
@@ -170,7 +209,6 @@ class GainPump:
                 pass
 
 
-@functools.lru_cache(maxsize=1)
 @functools.lru_cache(maxsize=1)
 def _ffplay_major() -> int:
     try:
@@ -191,16 +229,62 @@ def sink_command() -> list[str]:
     ]
 
 
-def decoder_command(stream_url: str, headers: dict[str, str] | None = None, start: float = 0.0) -> list[str]:
-    """ffmpeg decoding the remote stream to raw s16le PCM on stdout (start > 0: seek to that many seconds)."""
+EQ_MIN_DB = -12.0
+EQ_MAX_DB = 12.0
+EQ_BASS_HZ = 100
+EQ_MID_HZ = 1000
+EQ_TREBLE_HZ = 6000
+
+
+def clamp_eq(v: float) -> float:
+    """Clamp one EQ band to [-12, +12] dB; NaN / junk -> 0."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    if v != v:
+        return 0.0
+    return max(EQ_MIN_DB, min(EQ_MAX_DB, v))
+
+
+def eq_filter(eq: tuple[float, float, float] | None) -> str:
+    """ffmpeg ``-af`` chain for (bass, mid, treble) dB; '' when flat (no filter at all).
+
+    Bass: low shelf @100 Hz, mid: 1-octave peaking @1 kHz, treble: high shelf @6 kHz.
+    A limiter is appended only when some band boosts, so boosts do not clip.
+    """
+    if not eq:
+        return ""
+    bass, mid, treble = (round(clamp_eq(x), 1) for x in eq)
+    parts = []
+    if bass:
+        parts.append(f"bass=g={bass:g}:f={EQ_BASS_HZ}")
+    if mid:
+        parts.append(f"equalizer=f={EQ_MID_HZ}:t=o:w=1:g={mid:g}")
+    if treble:
+        parts.append(f"treble=g={treble:g}:f={EQ_TREBLE_HZ}")
+    if parts and max(bass, mid, treble) > 0:
+        parts.append("alimiter=limit=0.95:level=disabled")
+    return ",".join(parts)
+
+
+def decoder_command(stream_url: str, headers: dict[str, str] | None = None, start: float = 0.0,
+                    eq: tuple[float, float, float] | None = None) -> list[str]:
+    """ffmpeg decoding the remote stream to raw s16le PCM on stdout (start > 0: seek to that many seconds).
+
+    ``eq`` = (bass, mid, treble) dB; flat / None adds no filter (command identical to the plain one).
+    """
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-vn"]
     if headers:
         cmd += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
     cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
     if start and start > 0:
         cmd += ["-ss", f"{start:.2f}"]
+    cmd += ["-i", stream_url]
+    af = eq_filter(eq)
+    if af:
+        cmd += ["-af", af]
     cmd += [
-        "-i", stream_url,
         "-f", "s16le", "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE), "pipe:1",
     ]
     return cmd
