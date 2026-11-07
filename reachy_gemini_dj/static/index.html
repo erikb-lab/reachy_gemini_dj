@@ -101,6 +101,17 @@
   <div class="tabpanel hide" role="tabpanel" id="p-settings" aria-labelledby="tab-settings">
     <section id="settings-panel"><div class="placeholder" data-placeholder>Backend, model and voice settings are loading&hellip;</div></section>
 
+    <section class="card" id="memory-card" aria-labelledby="h-mem" style="margin-top:16px">
+      <h2 id="h-mem">Memory <span class="badge" id="mem-n">0</span></h2>
+      <p class="sub">Things Reachy was asked to remember (say &ldquo;remember our pit is A3&rdquo;). Stored only on the robot and shared with the voice brain you use.</p>
+      <ul class="list" id="mem-list" aria-live="polite"></ul>
+      <form class="row" id="f-mem" autocomplete="off" style="margin-top:10px">
+        <label class="sr" for="mem_q">Add something to remember</label>
+        <input type="text" id="mem_q" class="grow" maxlength="200" placeholder="e.g. Our pit is A3" enterkeyhint="done">
+        <button class="btn" type="submit">Remember</button>
+      </form>
+    </section>
+
     <details class="acc" id="acc-quick">
       <summary>Quick settings (built-in)</summary>
       <div>
@@ -173,6 +184,7 @@
 <link rel="stylesheet" href="/static/settings.css">
 <script src="/static/robot.js" defer></script>
 <script src="/static/settings.js" defer></script>
+<script src="/static/memory.js" defer></script>
 <script>
 (function () {
   var order = ["dark", "light", "auto"], names = {dark: "\u263E Dark", light: "\u2600 Light", auto: "\u25D0 Auto"};

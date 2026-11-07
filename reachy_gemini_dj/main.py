@@ -28,6 +28,7 @@ from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
 from .gain import clamp_duck, clamp_volume
+from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
 from .remote_session import RemoteSession
 
@@ -63,6 +64,14 @@ class ConfigUpdate(BaseModel):
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
 VOICE_KEYS = {"api_key", "backend", "brain_url", "allow_gemini_assist", "extra_instructions", "voice", "model", "web_search"}
+
+
+class MemoryAdd(BaseModel):
+    text: str
+
+
+class MemoryDelete(BaseModel):
+    id: str
 
 
 class MuteUpdate(BaseModel):
@@ -143,6 +152,13 @@ class ReachyGeminiDJ(ReachyMiniApp):
             self.config, self.local_session, self.gemini_session, self.record_event,
             is_idle=lambda: not (self.audio_pipe and (self.audio_pipe._is_robot_speaking or self.audio_pipe._user_speaking)),
         )
+
+        # Long-term memory ("remember our pit is A3"): tools use it via execute_tool, both brains get the facts
+        self.memory = Memory()
+        self.gemini_session.memory = self.memory
+        self.local_session.get_memory = self.memory.texts
+        self._memory_sync_lock = threading.Lock()
+        self._memory_sync_pending = False
 
         # FRC: Nexus QR scan, live queuing alerts, Blue Alliance rankings (tools run on the robot; keys stay here)
         self.frc = FRC(self.config, get_frame=self._get_frame, say=self.voice.say, on_event=self.record_event)
@@ -381,6 +397,29 @@ class ReachyGeminiDJ(ReachyMiniApp):
             except Exception as e:
                 return {"ok": False, "error": str(e)}
 
+        # Memory: shown and edited on the controller page. Edits made here reach the local brain through a
+        # reconnect once the robot is idle (see _memory_changed); voice edits do not, the conversation has them.
+        @app.get("/api/memory")
+        def get_memory():
+            return {"ok": True, "facts": self.memory.listing(), "max": MAX_FACTS, "max_chars": MAX_CHARS}
+
+        @app.post("/api/memory")
+        def add_memory(req: MemoryAdd):
+            r = self.memory.add(req.text)
+            if r["status"] in ("added", "updated"):
+                self._memory_changed()
+            err = {"empty": "Type something to remember.",
+                   "full": f"Memory is full ({MAX_FACTS}); delete something first."}.get(r["status"])
+            return {"ok": err is None, "status": r["status"], **({"error": err} if err else {}),
+                    "facts": self.memory.listing()}
+
+        @app.post("/api/memory/delete")
+        def delete_memory(req: MemoryDelete):
+            ok = self.memory.delete_id(req.id)
+            if ok:
+                self._memory_changed()
+            return {"ok": ok, "facts": self.memory.listing(), **({} if ok else {"error": "No such memory"})}
+
         # Google endpoints
         @app.post("/api/google/client")
         def set_google_client(req: GoogleClientUpdate):
@@ -412,6 +451,35 @@ class ReachyGeminiDJ(ReachyMiniApp):
             self.google_account.disconnect()
             self.voice.init_client()
             return {"ok": True}
+
+    def _memory_changed(self) -> None:
+        """The page changed the facts: the local brain only learns them in the hello, so reconnect it - but never
+        in the middle of a conversation. Waits (in a background thread, up to 10 minutes) until the robot is idle.
+        Gemini Live reads the facts when it next connects; it is not interrupted. Not used for voice edits."""
+        with self._memory_sync_lock:
+            if self._memory_sync_pending:
+                return
+            self._memory_sync_pending = True
+
+        def work() -> None:
+            def done() -> None:
+                with self._memory_sync_lock:
+                    self._memory_sync_pending = False       # a later edit schedules a fresh reconnect
+
+            try:
+                deadline = time.monotonic() + 600
+                while time.monotonic() < deadline:
+                    if self.voice.active_name != "local":
+                        return
+                    if self.voice.is_idle():
+                        done()
+                        self.voice.init_client()
+                        return
+                    time.sleep(1.0)
+            finally:
+                done()
+
+        threading.Thread(target=work, daemon=True, name="memory-sync").start()
 
     def _tool_specs(self) -> list[dict]:
         """Tools offered to the local brain: only those that can work (each one costs prompt tokens to read)."""

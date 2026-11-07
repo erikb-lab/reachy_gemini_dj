@@ -16,23 +16,17 @@ from google import genai
 from google.genai import types
 
 from .gain import percent_to_volume, volume_to_percent
+from .memory import live_instruction_line
 
 log = logging.getLogger(__name__)
 
+MEMORY_TOOLS = ("remember", "forget", "list_memories")
+
 VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
 
-SYSTEM_PROMPT = """You are Reachy Mini, an expressive, witty tabletop robot DJ and companion.
-You speak aloud to the user using audio, so keep your spoken responses concise, punchy, and conversational (1-2 sentences unless details were requested).
+SYSTEM_PROMPT = """You are Reachy Mini, a witty, expressive tabletop robot DJ and companion. You talk out loud, so keep replies short and conversational, a sentence or two unless asked for more, and keep them extra brief while music plays. Never say JSON or tool names aloud.
 
-Capabilities:
-1. DJ / Music: You search, stream, and control music tracks. Duck or pause when interacting.
-2. Motion: You can turn your head, perform built-in dances, and express emotions with head and antenna gestures. When expressing a strong mood or reaction, invoke the robot motion tools.
-3. Google Workspace: You can check or schedule calendar events, list or complete tasks, and check unread emails when the user asks.
-
-Guidelines:
-- Never say JSON or function call names aloud.
-- When music plays, keep responses short so the user can enjoy the music.
-- If Google is not connected, politely remind the user they can link their account in the settings page.
+You can play and control music, move your head, dance and show emotions, check the user's Google calendar, tasks and email (if Google is not linked, tell them to connect it in the settings page), remember facts you are asked to remember, and set timers and alarms. Use your tools for these instead of just saying you did them, and use a motion tool when you react strongly to something.
 """
 
 
@@ -160,6 +154,30 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 properties={"top": types.Schema(type="INTEGER", description="How many top teams (default 5, max 10).")},
             ),
         ),
+        # Long-term memory
+        types.FunctionDeclaration(
+            name="remember",
+            description="Save a short fact the user wants remembered, written in third person (e.g. \"The team's pit is A3\").",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"fact": types.Schema(type="STRING", description="The fact to remember.")},
+                required=["fact"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="forget",
+            description="Forget a remembered fact. Say \"all\" only if the user asked to forget everything.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={"fact": types.Schema(type="STRING", description="Which fact to forget, or \"all\".")},
+                required=["fact"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="list_memories",
+            description="List everything you were asked to remember.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
         # Google Workspace Tools
         types.FunctionDeclaration(
             name="calendar_events",
@@ -239,6 +257,8 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
 
 class GeminiSession:
     """Manages the connection, audio streams, and tool execution with Gemini Live."""
+
+    memory = None                 # memory.Memory, set by main.py (long-term facts; see memory.py)
 
     def __init__(
         self,
@@ -346,6 +366,10 @@ class GeminiSession:
         instructions = SYSTEM_PROMPT
         if self.config.extra_instructions:
             instructions += f"\n\nUser Context:\n{self.config.extra_instructions}"
+        if self.memory is not None:
+            line = live_instruction_line(self.memory.texts())
+            if line:
+                instructions += "\n\n" + line
 
         kw: dict[str, Any] = dict(
             response_modalities=["AUDIO"],
@@ -460,7 +484,8 @@ class GeminiSession:
         responses = []
         for fc in tool_call.function_calls or []:
             args = dict(fc.args or {})
-            log.info("Tool invocation requested: %s with args %s", fc.name, args)
+            log.info("Tool invocation requested: %s with args %s", fc.name,
+                     "<hidden>" if fc.name in MEMORY_TOOLS else args)      # memory is personal: never log its text
             try:
                 res = await asyncio.to_thread(self.execute_tool, fc.name, args)
             except Exception as e:
@@ -518,6 +543,15 @@ class GeminiSession:
                 if self.motion:
                     return {"result": f"Saved pose {self.motion.save_pose(args.get('name', ''))}"}
                 return {"error": "Robot motion not ready yet"}
+
+            elif name in MEMORY_TOOLS:
+                if self.memory is None:
+                    return {"error": "Memory is not available."}
+                if name == "remember":
+                    return self.memory.tool_remember(args.get("fact", ""))
+                if name == "forget":
+                    return self.memory.tool_forget(args.get("fact", ""))
+                return self.memory.tool_list()
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)
