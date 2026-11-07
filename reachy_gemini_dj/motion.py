@@ -122,6 +122,10 @@ class Motion:
         except Exception:
             return []
 
+    def moving(self) -> bool:
+        """True while Reachy moves itself or is limp for hand posing (the IMU watcher must ignore the sensor then)."""
+        return bool(self.busy or self.learning or not self._q.empty())
+
     def status(self) -> dict:
         return {
             "enabled": bool(self._enabled()),

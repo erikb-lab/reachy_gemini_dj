@@ -32,6 +32,7 @@ from .gain import clamp_duck, clamp_volume
 from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
 from .remote_session import RemoteSession
+from .imu import ImuReactions, ImuWatcher
 from .qol import ConversationLog, Greeter, QuietMode, brain_status
 
 log = logging.getLogger("reachy_gemini_dj")
@@ -66,6 +67,7 @@ class ConfigUpdate(BaseModel):
     listen_mode: str | None = None          # "always" | "push_to_talk"
     timezone: str | None = None             # IANA name, sent by the controller page
     greet_on_start: bool | None = None
+    imu_reactions: bool | None = None
 
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
@@ -226,6 +228,20 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.local_session.on_turn_done = self.convo.turn_done
         self.gemini_session.on_turn_done = self.convo.turn_done
 
+        # IMU (imu.py): events (picked up / bumped / shaken / tipped over) -> short spoken reactions; robot_sensors tool
+        self.imu = ImuWatcher(
+            read_imu=self._read_imu, suppress=self._imu_suppressed,
+            no_bump=lambda: self.music.is_playing or bool(self.audio_pipe and self.audio_pipe._is_robot_speaking),
+            on_event=lambda kind, info: self.imu_reactions.on_event(kind, info),
+        )
+        self.imu_reactions = ImuReactions(
+            say=self.voice.say, emotion=lambda name: self.motion.emotion(name) if self.motion else None,
+            enabled=lambda: self.config.imu_reactions, is_idle=self.voice.is_idle,
+            is_quiet=lambda: self.quiet.active,
+            motion_free=lambda: bool(self.motion and self.config.motion_enabled and not self.motion.moving()),
+        )
+        self.gemini_session.imu = self.imu
+
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
 
@@ -248,6 +264,15 @@ class ReachyGeminiDJ(ReachyMiniApp):
         media = getattr(self._mini, "media", None)
         fn = getattr(media, "get_frame", None)
         return fn() if callable(fn) else None
+
+    def _read_imu(self):
+        """Latest cached IMU dict from the SDK (50 Hz cache, cheap), or None (Lite / simulator / stale)."""
+        return getattr(self._mini, "imu", None)
+
+    def _imu_suppressed(self) -> bool:
+        """Ignore the IMU while Reachy moves itself, is limp for hand posing, or is in quiet mode."""
+        m = self.motion
+        return bool(self.quiet.active or (m is not None and m.moving()))
 
     def _set_muted(self, muted: bool) -> None:
         self.muted = bool(muted)
@@ -319,6 +344,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 "brain": brain_status(self.voice.status(), self.local_session.state, self.convo.last_latency("local")),
                 "conversation": self.convo.listing(),
                 "quiet": self.quiet.status(),
+                "imu": self.imu.status(),
                 "config": {
                     "api_key_set": bool(self.config.api_key),
                     "model": self.config.model,
@@ -334,6 +360,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "dance_enabled": self.config.dance_enabled,
                     "timezone": self.config.timezone,
                     "greet_on_start": self.config.greet_on_start,
+                    "imu_reactions": self.config.imu_reactions,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
@@ -682,6 +709,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.timers.start()
         self.quiet.motion = self.motion
         self.quiet.start()
+        self.imu.start()
 
         # Run expressive subtle reactions while idle
         while not stop_event.is_set():
@@ -704,6 +732,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.frc.stop()
         self.timers.stop()
         self.quiet.stop()
+        self.imu.stop()
         self.voice.stop()
         if self.audio_pipe:
             self.audio_pipe.stop()
