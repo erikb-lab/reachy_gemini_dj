@@ -598,7 +598,10 @@ class Timers:
         else:
             kinds = {v["kind"] for v in victims}
             noun = f"{victims[0]['kind']}s" if len(kinds) == 1 else "timers and alarms"
-            say = f"Okay, cancelled all {_COUNT.get(len(victims), len(victims))} {noun}."
+            n = len(victims)
+            say = ("Okay, cancelled the timer and the alarm." if n == 2 and len(kinds) > 1 else
+                   f"Okay, cancelled both {noun}." if n == 2 else
+                   f"Okay, cancelled all {_COUNT.get(n, n)} {noun}.")
         self.on_event("timer", say)
         return {"ok": True, "cancelled": len(victims), "say": say}
 

@@ -122,15 +122,17 @@ Reachy Mini (CM4)                                  Brain computer (laptop / Mac 
 - **Speed.** These timings come from a CPU-only laptop (Intel i5-10310U), measured from when you stop talking
   to Reachy's first word:
 
-  | Request | Time to first word |
-  |---|---|
-  | Music controls (pause, play, skip, stop) | about 1.5 s |
-  | Chat | 3-5 s |
-  | Play music, emotions | 7-14 s |
-  | Weather, team lookup | about 16 s |
-  | Web search | about 25 s |
-  | Camera | about 60 s |
-  | First start (one time) | about 80 s warm-up |
+  | Request | First word | Full answer starts |
+  |---|---|---|
+  | Music controls, set or cancel a timer | about 1.5 s | same |
+  | Chat | 3-4 s | same |
+  | Memory ("remember…", "what do you remember?") | 7-12 s | same |
+  | Play music, emotions | 7-14 s | same |
+  | Weather, team lookup, next match | about 1 s ("Let me check…") | 10-12 s |
+  | Web search | about 1 s ("Let me look that up") | about 23 s |
+  | Camera | about 1 s ("Let me take a look") | about 50 s |
+  | Brain restart | under 1 s (saved warm-up) | |
+  | Very first start, or after changing tools or settings that reach the brain | about 110 s warm-up | |
 
 ### Privacy and network safety
 - **The Gemini API key never leaves the robot.** For "ask Gemini", the brain asks the robot, and the robot calls

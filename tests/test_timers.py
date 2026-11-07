@@ -202,7 +202,7 @@ def test_cancel_latest_and_all(tmp_path):
     assert t.list_timers()["timers"] == []
     t.set_alarm("7 am")
     t.set_alarm("8 am")
-    assert t.cancel_timer("all alarms")["say"] == "Okay, cancelled all two alarms."
+    assert t.cancel_timer("all alarms")["say"] == "Okay, cancelled both alarms."
 
 
 def test_cancel_by_id(tmp_path):

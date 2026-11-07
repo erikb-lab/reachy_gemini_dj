@@ -138,6 +138,20 @@ def quick_command(heard: str) -> tuple[str, str, dict] | None:
     return None
 
 
+def _compact(res: Any) -> str:
+    """What history keeps for a tool result the LLM never read (the spoken answer is in the next message)."""
+    if _failed(res):
+        return json.dumps({"error": str((res or {}).get("error", "failed") if isinstance(res, dict) else "failed")[:120]})
+    return '{"ok": true}'
+
+
+def _compact_unsent(msgs: list[dict], results: list[tuple[int, Any]]) -> None:
+    """Results answered without another LLM round were never sent to llama-server, so they are not in its prompt
+    cache: storing them whole would make the NEXT turn read them (~20 tokens/s on a CPU). Keep a stub instead."""
+    for i, res in results:
+        msgs[i] = {**msgs[i], "content": _compact(res)}
+
+
 def say_of(res: Any) -> str:
     """The ready-to-speak answer in a tool result ({"say": "..."} with no error), else ''."""
     if isinstance(res, dict) and "error" not in res and isinstance(res.get("say"), str):
@@ -405,7 +419,7 @@ class BrainSession:
             self._remember([{"role": "user", "content": heard},
                             {"role": "assistant", "content": "", "tool_calls": [
                                 {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(qargs)}}]},
-                            {"role": "tool", "tool_call_id": cid, "content": json.dumps(res)},
+                            {"role": "tool", "tool_call_id": cid, "content": _compact(res)},
                             {"role": "assistant", "content": say}])
             log.info("turn: heard=%r shortcut=%s total=%.1fs", heard, name, time.time() - t0)
             return
@@ -441,7 +455,7 @@ class BrainSession:
                 final = content
                 break
             msgs.append({"role": "assistant", "content": content, "tool_calls": calls})
-            names, any_failed, says = [], False, []
+            names, any_failed, says, results = [], False, [], []
             for c in calls:
                 name = c["function"]["name"]
                 names.append(name)
@@ -461,9 +475,11 @@ class BrainSession:
                     res = self._robot_call(name, args, self.cfg.tool_timeout_s)
                 any_failed = any_failed or _failed(res)
                 says.append(say_of(res))             # before truncation: the spoken answer must stay whole
+                results.append((len(msgs), res))
                 msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res)[:self.cfg.tool_result_chars]})
             if all(says):
                 text = " ".join(says)            # every tool gave a ready answer: speak it, no more LLM rounds
+                _compact_unsent(msgs, results)
                 on_clause(text)
                 final = text
                 break
@@ -475,6 +491,7 @@ class BrainSession:
                 break                            # already spoke and only action tools ran: done
             elif not any_failed and all(n in CANNED_ACK for n in names):
                 on_clause(CANNED_ACK[names[0]])  # nothing said yet: confirm instantly, skip another LLM round
+                _compact_unsent(msgs, results)
                 final = CANNED_ACK[names[0]]
                 break
         reply = " ".join(spoken_all).strip()

@@ -552,3 +552,12 @@ def test_quick_timer_passes_args_and_speaks_say():
     assert said(sent) == ["Timer set for 10 minutes."]
     assert '"duration": "10 minutes"' in s.turns[-1][1]["tool_calls"][0]["function"]["arguments"]
     s.close()
+
+
+def test_unsent_tool_results_are_stubbed_in_history():
+    """A result answered by its "say" never reaches the LLM, so history keeps a stub, not the whole result."""
+    from reachy_brain.session import _compact, _compact_unsent
+    msgs = [{"role": "tool", "tool_call_id": "a", "content": '{"big": "' + "x" * 900 + '", "say": "hi"}'}]
+    _compact_unsent(msgs, [(0, {"big": "x" * 900, "say": "hi"})])
+    assert msgs[0] == {"role": "tool", "tool_call_id": "a", "content": '{"ok": true}'}
+    assert "nope" in _compact({"error": "nope"})
