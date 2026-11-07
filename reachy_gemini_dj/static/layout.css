@@ -1,0 +1,94 @@
+/* Responsive layout (loaded last, after every other stylesheet).
+   Phone  (< 760px):  one list, small header, tabs as a bottom bar, hold-to-talk docked above it.
+   Laptop (760-1279): two columns (music | conversation), timers/sensors/events in a row underneath.
+   Desktop (>= 1280): three columns side by side, wider page. */
+
+/* ---------- shared ---------- */
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+#p-dj .grid{align-items:start}
+.ptt-btn{min-height:110px}
+
+/* ---------- desktop ---------- */
+@media (min-width:1280px){
+  .wrap{max-width:1680px;padding:0 24px}
+  #p-dj .grid{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) minmax(0,.9fr);gap:20px}
+  .col{gap:20px}
+  .cv-list{max-height:min(62vh,680px)}
+  #feed{max-height:min(44vh,460px)}
+  #robot-panel{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:20px;align-items:start}
+  #robot-panel .pn-card{margin:0}
+  #settings-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+  #settings-panel .pn-card{margin:0}
+  #p-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 20px;align-items:start}
+  #p-settings > #settings-panel{grid-column:1/-1;margin-bottom:4px}
+  #p-settings > #memory-card{grid-column:1/-1}
+  #p-settings > details.acc{grid-column:1/-1}
+}
+
+/* ---------- laptop ---------- */
+@media (min-width:760px) and (max-width:1279.98px){
+  #p-dj .grid{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px}
+  .cv-list{max-height:600px}
+  .col-c{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  .col-c > section[aria-labelledby="h-ev"]{grid-column:1/-1}
+  #robot-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+  #robot-panel .pn-card{margin:0}
+}
+
+/* ---------- phone ---------- */
+@media (max-width:759.98px){
+  /* header: one short row; status chips scroll sideways instead of wrapping */
+  #statusbar .wrap{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:6px;padding:6px 12px}
+  #statusbar .wrap::-webkit-scrollbar{display:none}
+  .brand{font-size:16px;margin-right:4px}
+  .brand .sr{display:none}
+  .stat{font-size:12.5px;padding:3px 9px;flex:0 0 auto}
+  #st-model{display:none}
+  #theme-btn{margin-left:auto;flex:0 0 auto;min-height:32px;padding:2px 10px;font-size:.8rem;
+    position:sticky;right:0;box-shadow:-10px 0 10px var(--card)}
+
+  .wrap{padding:0 12px}
+  .card{padding:14px;border-radius:16px}
+  #p-dj .grid{gap:12px}
+  .col{display:contents}
+
+  /* phone order: music first, then talk history, then the rest */
+  #p-dj section[aria-labelledby="h-np"]{order:1}
+  #p-dj section[aria-labelledby="h-search"]{order:2}
+  #p-dj section[aria-labelledby="h-mq"]{order:3}
+  #p-dj section[aria-labelledby="h-tm"]{order:4}
+  #p-dj section[aria-labelledby="h-mic"]{order:5}
+  #p-dj section[aria-labelledby="h-cv"]{order:6}
+  #p-dj section[aria-labelledby="h-im"]{order:7}
+  #p-dj section[aria-labelledby="h-ev"]{order:8}
+
+  .disc{width:64px;height:64px;flex-basis:64px;font-size:30px;border-radius:16px}
+  .np-t{font-size:19px}
+  .tbtn{width:52px;height:52px}
+  .tbtn.main{width:66px;height:66px;font-size:28px}
+  .transport{margin:10px 0}
+
+  /* tabs become a bottom bar */
+  .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;margin:0;gap:6px;
+    padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--card);
+    border-top:1px solid var(--line);box-shadow:0 -6px 20px rgba(0,0,0,.18)}
+  .tabs button{flex:1 1 0;min-height:48px;padding:0 8px}
+  .tabpanel{padding:12px 0 calc(84px + env(safe-area-inset-bottom))}
+
+  /* hold-to-talk docked just above the bottom bar */
+  .ptt-card{position:fixed;left:12px;right:12px;bottom:calc(72px + env(safe-area-inset-bottom));z-index:29;
+    padding:0;border:0;background:transparent;box-shadow:none}
+  .ptt-card h2,.ptt-card .ptt-hint{display:none}
+  .ptt-btn{min-height:64px;flex-direction:row;gap:10px;font-size:1.15rem;border-radius:16px;
+    background:var(--card);box-shadow:0 6px 22px rgba(0,0,0,.3)}
+  .ptt-btn:not(.live){background:var(--soft)}
+  .ptt-ic{font-size:1.6rem}
+  body:has(.ptt-card:not(.hide)) #p-dj{padding-bottom:calc(160px + env(safe-area-inset-bottom))}
+
+  /* toasts sit above the docked controls */
+  #toast{bottom:calc(150px + env(safe-area-inset-bottom))}
+  .pn-toasts{bottom:calc(150px + env(safe-area-inset-bottom))}
+
+  .cv-list{max-height:440px}
+  #feed{max-height:320px}
+}
