@@ -126,6 +126,117 @@ def _join(items: list[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
+def _nth(n: Any) -> str:
+    """4 -> '4th' (a speech normalizer reads these as ordinals)."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return ""
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def _words(text: str) -> int:
+    return len(text.split())
+
+
+def _fit(variants: list[str], limit: int) -> str:
+    """The first (richest) variant within `limit` words, else the shortest one."""
+    cleaned = [_clean_say(v) for v in variants if v]
+    return next((v for v in cleaned if _words(v) <= limit), cleaned[-1] if cleaned else "")
+
+
+_CHAMP_WORDS = {"champs", "champ", "championship", "championships", "worlds", "world", "cmp", "einstein"}
+_DISTRICT_WORDS = {"state", "district", "districts"}
+_STOP = {"the", "a", "an", "in", "at", "of", "for", "to", "and", "their", "them", "team", "teams", "competition",
+         "competitions", "event", "events", "regional", "regionals", "division", "tournament", "frc", "robotics",
+         "season", "this", "that", "last", "year", "how", "did", "do", "they", "its", "our", "my", "s"}
+_CMP_TYPES = (3, 4)
+_PICK = {0: "the captain of", 1: "the first pick of", 2: "the second pick of", 3: "the backup pick of"}
+_YEAR_TOK = re.compile(r"(19|20)\d\d")
+
+
+def _short_event(name: str) -> str:
+    return re.sub(r"\s+(presented|sponsored|powered)\s+by\b.*$", "", name or "", flags=re.I).strip() or "an event"
+
+
+def _award_name(name: str) -> str:
+    n = re.sub(r"\s+(presented|sponsored|powered)\s+by\b.*$", "", name or "", flags=re.I).strip()
+    return n
+
+
+def _tokens(q: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", q.lower()) if t not in _STOP]
+
+
+def _outcome(r: dict, division: bool = False) -> str:
+    lvl, st = r.get("playoffs"), r.get("playoff_status")
+    if st == "won":
+        return "won the division" if division else "won the event"
+    if lvl in _PLAYOFF:
+        return f"lost in {_PLAYOFF[lvl]}" if st == "eliminated" else f"made it to {_PLAYOFF[lvl]}"
+    if r.get("qual_rank") and r.get("qual_done") and not r.get("alliance"):
+        return "did not make the playoffs"
+    return ""
+
+
+def _score(r: dict) -> tuple:
+    return (r.get("playoff_status") == "won", _PLAYOFF_RANK.get(r.get("playoffs"), 0), -(r.get("qual_rank") or 999))
+
+
+def _row(st: dict | None) -> dict:
+    """Compact result row from a TBA team-event status."""
+    st = st or {}
+    q = st.get("qual") or {}
+    rk = q.get("ranking") or {}
+    al = st.get("alliance") or {}
+    po = st.get("playoff") or {}
+    row: dict = {}
+    if rk.get("rank"):
+        row["qual_rank"] = rk["rank"]
+        row["record"] = _rec(rk.get("record"))
+        if q.get("num_teams"):
+            row["of"] = q["num_teams"]
+        if q.get("status") == "completed":
+            row["qual_done"] = True
+    if al.get("number"):
+        row["alliance"] = al["number"]
+        row["pick"] = al.get("pick")
+    if po.get("level"):
+        row["playoffs"] = po["level"]
+        row["playoff_status"] = po.get("status")
+        if po.get("record"):
+            row["playoff_record"] = _rec(po["record"])
+    return row
+
+
+def _place(r: dict) -> str:
+    """'ranked 4th of 60' (+ ' with a record of 9-3-0' when asked for)."""
+    return f"ranked {_nth(r['qual_rank'])}" + (f" of {r['of']}" if r.get("of") else "")
+
+
+def _sentences(rows: list[dict], level: int, who: str = "they") -> list[str]:
+    """Event-by-event sentences, richest at level 0, only the best event at level 2."""
+    have = [r for r in rows if r.get("qual_rank") or r.get("playoffs")]
+    if not have:
+        return ["No results are posted yet."] if rows else []
+
+    def pred(r: dict) -> str:
+        bits = ([_place(r)] if r.get("qual_rank") else []) + ([_outcome(r)] if _outcome(r) else [])
+        return " and ".join(bits) + "."
+
+    def one(r: dict) -> str:
+        return f"At {_short_event(r['event'])} {who} " + pred(r)
+    if level == 0:
+        return [one(r) for r in have[:5]]
+    best = max(have, key=_score)
+    if len(have) == 1:
+        return [one(best)]
+    best_s = f"Best was {_short_event(best['event'])}, where {who} " + pred(best)
+    if level == 1:
+        return [best_s, f"{len(have) - 1} other event{'s' if len(have) > 2 else ''} too."]
+    return [best_s]
+
+
 class FRC:
     def __init__(self, config, get_frame: Callable[[], object] | None = None, say: Callable[[str], None] | None = None,
                  on_event: Callable[[str, str], None] | None = None, http_get=_get, http_get_cond=None):
@@ -189,7 +300,8 @@ class FRC:
             if name == "frc_event_status":
                 return self.event_status()
             if name == "frc_team_info":
-                return self.team_info(str(args.get("team") or self.team), args.get("year"))
+                return self.team_info(str(args.get("team") or self.team), args.get("year"),
+                                      str(args.get("event") or ""), str(args.get("detail") or ""))
             if name == "frc_rankings":
                 return self.rankings(int(args.get("top") or 5))
             return {"error": f"Unknown FRC tool {name}"}
@@ -354,12 +466,241 @@ class FRC:
         out["say"] = _clean_say(say)
         return out
 
-    def team_info(self, team: str, year: int | None = None) -> dict:
-        """About a team: name, home, rookie year, recent events with results, awards. Needs only a Blue Alliance
-        key; if an event is set (and a Nexus key) the pit location and current rank at it are added too."""
+    # ---------------- team lookups (Blue Alliance only) ----------------
+    def _safe(self, path: str, default: Any = None) -> Any:
+        """A cached TBA read that never raises (HTTP 404 and friends become `default`)."""
+        try:
+            r = self._tba(path)
+            return default if r is None else r
+        except RuntimeError:
+            raise                                  # no API key: say so
+        except Exception as e:
+            log.debug("TBA %s unavailable: %s", path, e)
+            return default
+
+    def team_info(self, team: str, year: int | str | None = None, event: str = "", detail: str = "") -> dict:
+        """About a team (Blue Alliance key only). `event` (free text or key): detailed results there; `year`: that
+        whole season; detail='all': career summary; otherwise profile + the latest season. Always has `say`."""
         team = (team or "").strip().lstrip("frcFRC") or self.team
         if not team.isdigit():
             return {"error": "Which team number?"}
+        try:
+            yr = int(str(year).strip()) if year not in (None, "", 0, "0") else None
+        except ValueError:
+            yr = None
+        event = (event or "").strip()
+        if event:
+            return self._event_result(team, event, yr)
+        if yr:
+            return self._season_result(team, yr)
+        if str(detail or "").strip().lower() in ("all", "everything", "full", "history", "career"):
+            return self._career_result(team)
+        return self._profile_result(team)
+
+    def _events(self, team: str) -> list[dict]:
+        evs = self._tba(f"/team/frc{team}/events/simple") or []
+        return sorted((e for e in evs if isinstance(e, dict)), key=lambda e: e.get("start_date") or "", reverse=True)
+
+    def _year_rows(self, team: str, yr: int, events: list[dict]) -> list[dict]:
+        """One result row per event the team played in `yr` (oldest first)."""
+        names = {e.get("key"): e for e in events}
+        keys = [e["key"] for e in reversed(events) if e.get("year") == yr and e.get("key")]
+        if not keys:
+            return []
+        statuses = self._tba(f"/team/frc{team}/events/{yr}/statuses") or {}
+        keys += [k for k in statuses if k not in keys]
+        rows = []
+        for k in keys:
+            e = names.get(k) or {}
+            rows.append({"event": e.get("name") or k, "year": yr, "key": k, "etype": e.get("event_type"),
+                         **_row(statuses.get(k))})
+        return rows
+
+    def _awards_text(self, names: list[str], limit: int = 3) -> str:
+        names = [_award_name(n) for n in names if n][:limit]
+        were = [f"the {n}" for n in names if re.search(r"(Winners?|Finalists?)$", n)]
+        won = [f"the {n}" for n in names if not re.search(r"(Winners?|Finalists?)$", n)]
+        return " ".join(([f"They were {_join(were)}."] if were else []) + ([f"They won {_join(won)}."] if won else []))
+
+    # -- one event --
+    @staticmethod
+    def _match_event(events: list[dict], query: str, yr: int | None) -> tuple[list[dict], str]:
+        """Best-matching events (equal top score) for free text; returns (matches, leftover query)."""
+        q = query.lower().strip()
+        toks = _tokens(q)
+        if yr is None:
+            ys = [t for t in toks if _YEAR_TOK.fullmatch(t)]
+            if ys:
+                yr = int(ys[0])
+        toks = [t for t in toks if not (_YEAR_TOK.fullmatch(t) and yr == int(t))]
+        champ = any(t in _CHAMP_WORDS for t in toks)
+        dist = any(t in _DISTRICT_WORDS for t in toks)
+        toks = [t for t in toks if t not in _CHAMP_WORDS]
+
+        def score(e: dict) -> int:
+            words = set(re.findall(r"[a-z0-9]+", " ".join(str(e.get(k) or "") for k in
+                                                            ("name", "city", "state_prov", "short_name", "district")).lower()))
+            sc = 0
+            if (e.get("key") or "").lower() in q.split() or q == (e.get("key") or "").lower():
+                sc += 100
+            for t in toks:
+                if t in words or (len(t) >= 4 and any(w.startswith(t) for w in words)):
+                    sc += 10
+            if champ and e.get("event_type") in _CMP_TYPES:
+                sc += 20
+            if dist and e.get("event_type") in (2, 5):
+                sc += 20
+            return sc
+
+        pool = [e for e in events if yr is None or e.get("year") == yr] if yr is not None else list(events)
+        if yr is not None and not any(score(e) for e in pool) and (toks or champ or dist):
+            pool = list(events)                     # nothing that season: look at every year
+        if not toks and not champ and not dist:     # "their competition this year": simply the latest one
+            top = pool[:1]
+            return top, ""
+        scored = [(score(e), e) for e in pool]
+        best = max((s for s, _ in scored), default=0)
+        if best <= 0:
+            return [], q
+        top = [e for s, e in scored if s == best]
+        # same season first (when no year was given: the newest season), Einstein over a division, newest first
+        top.sort(key=lambda e: (e.get("year") or 0, e.get("event_type") if e.get("event_type") in _CMP_TYPES else 0,
+                                e.get("start_date") or ""), reverse=True)
+        season = top[0].get("year")
+        return [e for e in top if e.get("year") == season] + [e for e in top if e.get("year") != season], q
+
+    def _event_result(self, team: str, query: str, yr: int | None) -> dict:
+        events = self._events(team)
+        matches, _ = self._match_event(events, query, yr)
+        if not matches:
+            recent = [f"{_short_event(e.get('name', ''))} in {e.get('year')}" for e in events[:3]]
+            say = f"I could not find an event matching {query} for team {team}."
+            if recent:
+                say += " Their latest events were " + _join(recent) + "."
+            return {"team": team, "say": _clean_say(say)}
+        e = matches[0]
+        key, year = e.get("key"), e.get("year")
+        others = [m for m in matches[1:] if m.get("year") == year][:2]
+        st = self._safe(f"/team/frc{team}/event/{key}/status") or {}
+        r = _row(st)
+        aw = [a.get("name", "") for a in self._safe(f"/team/frc{team}/event/{key}/awards") or []]
+        div = e.get("event_type") == 3
+        where = f" in {e['city']}" if e.get("city") and e["city"].lower() not in (e.get("name") or "").lower() else ""
+        bits = []
+        if r.get("qual_rank"):
+            bits.append(_place(r) + f" with a record of {r['record']}")
+        if r.get("alliance"):
+            bits.append(f"was {_PICK.get(r.get('pick'), 'on')} alliance {r['alliance']}")
+        if _outcome(r, div):
+            bits.append(_outcome(r, div).replace("made it to", "reached"))
+        head = f"At the {year} {_short_event(e.get('name', ''))}{where}, team {team} "
+        body = (_join(bits) if bits else "has no results recorded yet") + "."
+        also = f" They also played the {_join([_short_event(m.get('name', '')) for m in others])} that year." if others else ""
+        win = self._awards_text(aw)
+        say = _fit([head + body + " " + win + also, head + body + " " + win, head + body], 60)
+        out = {"team": team, "event": _short_event(e.get("name", "")), "year": year,
+               **{k: v for k, v in r.items() if k not in ("qual_done",)}}
+        if aw:
+            out["awards"] = [_award_name(a) for a in aw[:4]]
+        if others:
+            out["also_matched"] = [_short_event(m.get("name", "")) for m in others]
+        out["say"] = say
+        return out
+
+    # -- one season --
+    def _season_result(self, team: str, yr: int) -> dict:
+        events = self._events(team)
+        rows = self._year_rows(team, yr, events)
+        if not rows:
+            return {"team": team, "year": yr, "say": f"I have no events on record for team {team} in {yr}."}
+        aw = [a.get("name", "") for a in self._safe(f"/team/frc{team}/awards/{yr}") or []]
+        n = len(rows)
+        intro = f"In {yr}, team {team} played {n} event{'s' if n > 1 else ''}."
+        awt = self._awards_text(aw, 2)
+        variants = [" ".join([intro, *_sentences(rows, lv), awt]) for lv in (0, 1, 2)]
+        variants.append(" ".join([intro, *_sentences(rows, 2)]))
+        say = _fit(variants, 60)
+        out = {"team": team, "year": yr, "events": [self._compact(r) for r in rows[:6]]}
+        if aw:
+            out["awards"] = [_award_name(a) for a in aw[:5]]
+        out["say"] = say
+        return out
+
+    @staticmethod
+    def _compact(r: dict) -> dict:
+        d = {"event": _short_event(r.get("event", "")), "year": r.get("year")}
+        if r.get("qual_rank"):
+            d.update(rank=r["qual_rank"], of=r.get("of"), record=r.get("record"))
+        o = _outcome(r)
+        if o:
+            d["result"] = o
+        return {k: v for k, v in d.items() if v is not None}
+
+    # -- career --
+    def _career_result(self, team: str) -> dict:
+        prof = self._safe(f"/team/frc{team}") or {}
+        events = self._events(team)
+        years = self._safe(f"/team/frc{team}/years_participated") or sorted({e.get("year") for e in events if e.get("year")})
+        awards = [a for a in self._safe(f"/team/frc{team}/awards") or [] if isinstance(a, dict)]
+        etype = {e.get("key"): e.get("event_type") for e in events}
+        wins = {a.get("event_key") for a in awards if a.get("award_type") == 1 and etype.get(a.get("event_key")) not in _CMP_TYPES}
+        champ_wins = sorted({a.get("year") for a in awards if a.get("award_type") == 1 and etype.get(a.get("event_key")) == 4})
+        finalists = {a.get("event_key") for a in awards if a.get("award_type") == 2 and etype.get(a.get("event_key")) not in _CMP_TYPES}
+        counts: dict[str, int] = {}
+        for a in awards:
+            t = a.get("award_type")
+            label = {0: "Chairman's/Impact", 69: "Chairman's/Impact", 9: "Engineering Inspiration", 10: "Rookie All-Star"}.get(t)
+            if label:
+                counts[label] = counts.get(label, 0) + 1
+        # Championship appearances: Einstein (type 4) beats a division (type 3)
+        cmp_by_year: dict[int, str] = {}
+        for e in sorted((e for e in events if e.get("event_type") in _CMP_TYPES), key=lambda e: e.get("year") or 0, reverse=True):
+            y = e.get("year")
+            level = "Einstein" if e["event_type"] == 4 else "division"
+            if y in champ_wins:
+                level = "won"
+            if cmp_by_year.get(y) != "won" and (y not in cmp_by_year or level == "Einstein"):
+                cmp_by_year[y] = level
+        latest = max((e.get("year") or 0 for e in events), default=0)
+        rows = self._year_rows(team, latest, events) if latest else []
+        out: dict = {"team": team, "seasons": len(years), "events": len(events), "event_wins": len(wins)}
+        for k, v in (("name", prof.get("nickname")), ("rookie_year", prof.get("rookie_year"))):
+            if v:
+                out[k] = v
+        if finalists:
+            out["finalist"] = len(finalists)
+        if champ_wins:
+            out["championship_wins"] = champ_wins
+        if cmp_by_year:
+            out["championships"] = [{"year": y, "reached": lv} for y, lv in sorted(cmp_by_year.items(), reverse=True)[:5]]
+        if counts:
+            out["awards"] = counts
+        # spoken, most impressive first, trimmed to about 70 words
+        def plural(n: int, w: str) -> str:
+            return f"{n} {w}{'' if n == 1 else 's'}"
+        head = f"Team {team} has played {plural(len(years) or len({e.get('year') for e in events}), 'season')} and {plural(len(events), 'event')}."
+        imp: list[str] = []
+        if champ_wins:
+            imp.append("They won the Championship in " + _join([str(y) for y in champ_wins[:3]]) + ".")
+        if wins:
+            imp.append(f"They won {plural(len(wins), 'event')}" + (f" and were finalists at {len(finalists)}." if finalists else "."))
+        if cmp_by_year:
+            ys = sorted(cmp_by_year, reverse=True)
+            ein = [y for y in ys if cmp_by_year[y] in ("Einstein", "won")]
+            imp.append(f"They went to the Championship {plural(len(ys), 'time')}, most recently in {ys[0]}" +
+                       (f", and reached Einstein in {_join([str(y) for y in ein[:3]])}." if ein else "."))
+        noted = [f"{v} {k}" for k, v in counts.items()]
+        aw_s = ("Awards include " + _join(noted[:3]) + ".") if noted else ""
+        last = " ".join(_sentences(rows, 2)) if rows else ""
+        last_s = (f"In {latest}, " + last[0].lower() + last[1:]) if last else ""
+        variants = [" ".join(x for x in [head, *imp, aw_s, last_s] if x),
+                    " ".join(x for x in [head, *imp, aw_s] if x),
+                    " ".join(x for x in [head, *imp[:2]] if x), head]
+        out["say"] = _fit(variants, 70)
+        return out
+
+    # -- default: profile + latest season --
+    def _profile_result(self, team: str) -> dict:
         out: dict = {"team": team}
         results_rows: list[dict] = []
         try:
@@ -372,29 +713,16 @@ class FRC:
             raise
         except Exception as e:
             out["note"] = str(e)[:120]
-        this_year = int(year or time.localtime().tm_year)
+        this_year = int(time.localtime().tm_year)
         try:
-            events = self._tba(f"/team/frc{team}/events/simple") or []
-            events = sorted(events, key=lambda e: e.get("start_date") or "", reverse=True)
+            events = self._events(team)
             out["recent_events"] = [f"{e.get('name', '?')} ({e.get('year', '')})" for e in events[:6]]
             yr = this_year if any(e.get("year") == this_year for e in events) else (events[0].get("year") if events else 0)
             if yr:
-                names = {e.get("key"): e.get("name", "") for e in events}
-                statuses = self._tba(f"/team/frc{team}/events/{yr}/statuses") or {}
-                results = []
-                for key, st in statuses.items():
-                    st = st or {}
-                    q = ((st.get("qual") or {}).get("ranking") or {})
-                    rec = q.get("record") or {}
-                    row = {"event": names.get(key, key), "year": yr}
-                    if q.get("rank"):
-                        row["qual_rank"] = q["rank"]
-                        row["record"] = f"{rec.get('wins', 0)}-{rec.get('losses', 0)}-{rec.get('ties', 0)}"
-                    po = (st.get("playoff") or {}).get("level")
-                    if po:
-                        row["playoffs"] = po
-                    results.append(row)
-                    results_rows.append({**row, "playoff_status": (st.get("playoff") or {}).get("status")})
+                results_rows = self._year_rows(team, yr, events)
+                results = [{k: v for k, v in {"event": r["event"], "year": yr, "qual_rank": r.get("qual_rank"),
+                                              "record": r.get("record"), "playoffs": r.get("playoffs")}.items() if v is not None}
+                           for r in results_rows]
                 if results:
                     out["results_" + str(yr)] = results[:4]
         except urllib.error.HTTPError:
@@ -429,30 +757,39 @@ class FRC:
 
     @staticmethod
     def _say_team(out: dict, rows: list[dict]) -> str:
+        """Profile sentence + the latest season's events (about 60 words or fewer)."""
         if not out.get("name"):
             return ""
-        parts = [f"Team {out['team']} is {out['name']}" + (f", from {out['from']}" if out.get("from") else "") + "."]
-        if out.get("rookie_year"):
-            parts.append(f"They started in {out['rookie_year']}.")
-        if rows:
-            def score(r):
-                return (r.get("playoff_status") == "won", _PLAYOFF_RANK.get(r.get("playoffs"), 0), -(r.get("qual_rank") or 999))
-            b = max(rows, key=score)
-            did = []
-            if b.get("qual_rank"):
-                did.append(f"ranked {_ordinal(b['qual_rank'])} with a record of {b['record']}")
-            if b.get("playoff_status") == "won":
-                did.append("won the event")
-            elif b.get("playoffs") in _PLAYOFF:
-                did.append(f"made it to {_PLAYOFF[b['playoffs']]}")
-            if did:
-                parts.append(f"In {b['year']} at {b['event']} they " + " and ".join(did) + ".")
+        head = f"Team {out['team']} is {out['name']}" + (f", from {out['from']}" if out.get("from") else "") + "."
+        rookie = f"They started in {out['rookie_year']}." if out.get("rookie_year") else ""
         aw = out.get("recent_awards") or []
-        if aw:
-            parts.append("Recent awards: " + _join([a.replace(" (", " in ").rstrip(")") for a in aw[:2]]) + ".")
-        if out.get("rank_at_event"):
-            parts.append(f"At this event they're ranked {_ordinal(out['rank_at_event'])}, {out['record_at_event']}.")
-        return _clean_say(" ".join(parts))
+        awards = ("Recent awards: " + _join([a.replace(" (", " in ").rstrip(")") for a in aw[:2]]) + ".") if aw else ""
+        here = (f"At this event they're ranked {_nth(out['rank_at_event'])}, {out['record_at_event']}."
+                if out.get("rank_at_event") else "")
+        have = [r for r in rows if r.get("qual_rank") or r.get("playoffs")]
+        yr = rows[0].get("year") if rows else ""
+        if len(have) <= 1:
+            season: list[list[str]] = [[]]
+            if have:
+                b = have[0]
+                did = []
+                if b.get("qual_rank"):
+                    did.append(f"ranked {_nth(b['qual_rank'])} with a record of {b['record']}")
+                if b.get("playoff_status") == "won":
+                    did.append("won the event")
+                elif b.get("playoffs") in _PLAYOFF:
+                    did.append(f"made it to {_PLAYOFF[b['playoffs']]}")
+                if did:
+                    season = [[f"In {b['year']} at {b['event']} they " + " and ".join(did) + "."]]
+        else:
+            intro = f"In {yr} they played {len(rows)} events."
+            season = [[intro, *_sentences(rows, lv)] for lv in (0, 1, 2)]
+        variants = []
+        for s in season:
+            variants += [" ".join(x for x in [head, rookie, *s, awards, here] if x),
+                         " ".join(x for x in [head, rookie, *s, here] if x),
+                         " ".join(x for x in [head, *s, here] if x)]
+        return _fit(variants, 60)
 
     def rankings(self, top: int = 5) -> dict:
         ev = self._need_event()

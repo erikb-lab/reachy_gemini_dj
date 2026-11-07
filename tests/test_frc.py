@@ -385,12 +385,12 @@ def test_team_info_say():
         raise AssertionError(url)
     r = FRC(cfg(frc_team="", frc_event=""), http_get=http).handle("frc_team_info", {"team": "254"})
     assert r["say"] == ("Team 254 is The Cheesy Poofs, from San Jose, California. They started in 1999. "
-                        "In 2025 at Silicon Valley Regional they ranked second with a record of 11-1-0 and made it to the semifinals. "
+                        "In 2025 at Silicon Valley Regional they ranked 2nd with a record of 11-1-0 and made it to the semifinals. "
                         "Recent awards: Regional Winner in 2025 and Engineering Inspiration in 2024.")
     print("SAY team_info:", r["say"])
     won = frc_mod.FRC._say_team({"team": "1", "name": "N"}, [{"event": "E", "year": 2025, "qual_rank": 1, "record": "9-0-0",
                                                              "playoffs": "f", "playoff_status": "won"}])
-    assert won.endswith("ranked first with a record of 9-0-0 and won the event.")
+    assert won.endswith("ranked 1st with a record of 9-0-0 and won the event.")
     for lvl, words in (("ef", "the eighth-finals"), ("qf", "the quarterfinals"), ("f", "the finals")):
         assert words in frc_mod.FRC._say_team({"team": "1", "name": "N"}, [{"event": "E", "year": 1, "playoffs": lvl}])
 
@@ -419,3 +419,202 @@ def test_errors_have_no_say():
     for tool, args in (("frc_rankings", {}), ("frc_event_status", {}), ("frc_next_match", {}), ("frc_team_info", {"team": "x"})):
         r = f.handle(tool, args)
         assert "error" in r and "say" not in r
+
+
+# ---------------- team lookups by event / season / career ----------------
+EV = [  # a team's events across years (TBA /events/simple shape)
+    {"key": "2026mndu", "name": "Lake Superior Regional", "city": "Duluth", "state_prov": "Minnesota", "year": 2026,
+     "event_type": 0, "start_date": "2026-03-20"},
+    {"key": "2026mnmi", "name": "Minnesota 10000 Lakes Regional presented by Foo", "city": "Minneapolis",
+     "state_prov": "Minnesota", "year": 2026, "event_type": 0, "start_date": "2026-04-03"},
+    {"key": "2026hop", "name": "Hopper Division", "city": "Houston", "state_prov": "Texas", "year": 2026,
+     "event_type": 3, "start_date": "2026-04-15"},
+    {"key": "2026cmptx", "name": "Einstein Field", "city": "Houston", "state_prov": "Texas", "year": 2026,
+     "event_type": 4, "start_date": "2026-04-18"},
+    {"key": "2025mndu", "name": "Lake Superior Regional", "city": "Duluth", "state_prov": "Minnesota", "year": 2025,
+     "event_type": 0, "start_date": "2025-03-21"},
+    {"key": "2025mndu2", "name": "Northern Lights Regional", "city": "Duluth", "state_prov": "Minnesota", "year": 2025,
+     "event_type": 0, "start_date": "2025-04-04"},
+    {"key": "2019mndu", "name": "Lake Superior Regional", "city": "Duluth", "state_prov": "Minnesota", "year": 2019,
+     "event_type": 0, "start_date": "2019-03-20"},
+    {"key": "2019mnmi", "name": "Minnesota 10000 Lakes Regional", "city": "Minneapolis", "state_prov": "Minnesota",
+     "year": 2019, "event_type": 0, "start_date": "2019-04-03"},
+    {"key": "2019arc", "name": "Archimedes Division", "city": "Houston", "state_prov": "Texas", "year": 2019,
+     "event_type": 3, "start_date": "2019-04-17"},
+]
+
+
+def status(rank=None, of=60, w=0, l=0, t=0, alliance=None, pick=None, level=None, pst=None, done=True):
+    st = {"qual": {"num_teams": of, "status": "completed" if done else "playing",
+                   "ranking": {"rank": rank, "record": {"wins": w, "losses": l, "ties": t}} if rank else None}}
+    if alliance:
+        st["alliance"] = {"number": alliance, "pick": pick}
+    if level:
+        st["playoff"] = {"level": level, "status": pst, "record": {"wins": 3, "losses": 1, "ties": 0}}
+    return st
+
+
+ST_2026 = {"2026mndu": status(4, 60, 9, 3, 0, 2, 1, "sf", "eliminated"),
+           "2026mnmi": status(1, 58, 11, 1, 0, 1, 0, "f", "won"),
+           "2026hop": status(30, 75, 6, 6, 0),
+           "2026cmptx": None}
+ST_2019 = {"2019mndu": status(9, 50, 8, 4, 0, 3, 2, "qf", "eliminated"), "2019mnmi": status(20, 60, 6, 6, 0),
+           "2019arc": status(40, 75, 5, 7, 0)}
+AWARDS = [
+    {"name": "Quality Award sponsored by Motorola", "award_type": 17, "year": 2026, "event_key": "2026mndu"},
+    {"name": "Regional Winners", "award_type": 1, "year": 2026, "event_key": "2026mnmi"},
+    {"name": "Regional Finalists", "award_type": 2, "year": 2025, "event_key": "2025mndu"},
+    {"name": "Regional Winners", "award_type": 1, "year": 2019, "event_key": "2019mndu"},
+    {"name": "Championship Winners", "award_type": 1, "year": 2026, "event_key": "2026cmptx"},
+    {"name": "Impact Award", "award_type": 69, "year": 2025, "event_key": "2025mndu"},
+    {"name": "Engineering Inspiration Award", "award_type": 9, "year": 2019, "event_key": "2019mndu"},
+]
+
+
+def team_http(calls=None, awards=AWARDS):
+    routes = {
+        "/team/frc2491": {"nickname": "NoMythic", "city": "Minneapolis", "state_prov": "Minnesota", "rookie_year": 2008},
+        "/team/frc2491/events/simple": EV,
+        "/team/frc2491/years_participated": [2008, 2019, 2025, 2026],
+        "/team/frc2491/awards": awards,
+        "/team/frc2491/events/2026/statuses": ST_2026,
+        "/team/frc2491/events/2019/statuses": ST_2019,
+        "/team/frc2491/events/2025/statuses": {"2025mndu": status(2, 55, 10, 2, 0, 1, 0, "f", "eliminated"), "2025mndu2": None},
+        "/team/frc2491/awards/2019": [a for a in awards if a["year"] == 2019],
+        "/team/frc2491/awards/2026": [a for a in awards if a["year"] == 2026],
+        "/team/frc2491/event/2026mndu/status": ST_2026["2026mndu"],
+        "/team/frc2491/event/2026mndu/awards": [awards[0]],
+        "/team/frc2491/event/2026hop/status": ST_2026["2026hop"],
+        "/team/frc2491/event/2026hop/awards": [],
+        "/team/frc2491/event/2026cmptx/status": status(None, None, alliance=3, pick=1, level="f", pst="won"),
+        "/team/frc2491/event/2026cmptx/awards": [awards[4]],
+        "/team/frc2491/event/2025mndu/status": {"qual": {"num_teams": 55, "status": "completed",
+                                                          "ranking": {"rank": 2, "record": {"wins": 10, "losses": 2, "ties": 0}}}},
+        "/team/frc2491/event/2025mndu/awards": [],
+        "/team/frc2491/event/2025mndu2/status": status(15, 55, 7, 5, 0),
+        "/team/frc2491/event/2025mndu2/awards": [],
+        "/team/frc2491/event/2019mndu/status": ST_2019["2019mndu"],
+        "/team/frc2491/event/2019mndu/awards": [],
+        "/team/frc2491/event/2019arc/status": ST_2019["2019arc"],
+        "/team/frc2491/event/2019arc/awards": [],
+    }
+
+    def cond(url, headers):
+        if calls is not None:
+            calls.append(url)
+        for k, v in routes.items():
+            if url.endswith("/api/v3" + k):
+                return v, None
+        raise AssertionError("unexpected " + url)
+    return cond
+
+
+def tinfo(**args):
+    f = FRC(cfg(frc_team="", frc_event=""), http_get=lambda *a, **k: None, http_get_cond=team_http())
+    return f.handle("frc_team_info", {"team": "2491", **args})
+
+
+def assert_clean(r, limit):
+    s = r["say"]
+    assert len(s.split()) <= limit, s
+    assert "http" not in s and "2026mndu" not in s and "X-TBA" not in s
+    assert "error" not in r
+
+
+def test_event_by_city_duluth_prefers_requested_year_else_latest():
+    r = tinfo(event="Duluth competition", year=2026)
+    assert r["say"] == ("At the 2026 Lake Superior Regional in Duluth, team 2491 ranked 4th of 60 with a record of 9-3-0, "
+                        "was the first pick of alliance 2 and lost in the semifinals. They won the Quality Award.")
+    assert r["qual_rank"] == 4 and r["alliance"] == 2
+    assert_clean(r, 60)
+    print("SAY event:", r["say"])
+    assert tinfo(event="their Duluth competition")["year"] == 2026          # most recent Duluth event
+    assert "2019" in tinfo(event="Duluth", year=2019)["say"]
+
+
+def test_event_ambiguous_same_year_names_the_other_one():
+    r = tinfo(event="Duluth", year=2025)
+    assert r["year"] == 2025 and r["also_matched"] == ["Lake Superior Regional"]
+    assert "also played the Lake Superior Regional that year" in r["say"]
+    assert "Northern Lights Regional" in r["say"] and "ranked 15th of 55 with a record of 7-5-0" in r["say"]
+    assert "did not make the playoffs" in r["say"]
+    print("SAY ambiguous:", r["say"])
+
+
+def test_event_champs_and_houston_find_the_championship():
+    for q in ("Champs in Houston", "Robotics Championships", "worlds", "championship", "Houston"):
+        r = tinfo(event=q, year=2026)
+        assert r["event"] == "Einstein Field", q                              # Einstein beats the division
+        assert "won the event" in r["say"] and "They were the Championship Winners" in r["say"]
+    r = tinfo(event="champs")
+    assert r["year"] == 2026 and "also played the Hopper Division" in r["say"]
+    r = tinfo(event="Hopper")
+    assert r["event"] == "Hopper Division" and "ranked 30th of 75" in r["say"] and "did not make the playoffs" in r["say"]
+    assert tinfo(event="Champs", year=2019)["event"] == "Archimedes Division"
+    print("SAY champs:", tinfo(event="Champs in Houston")["say"])
+
+
+def test_event_by_key_and_unknown_and_year_hint_in_text():
+    assert tinfo(event="2026mndu")["event"] == "Lake Superior Regional"
+    assert tinfo(event="duluth 2019")["year"] == 2019
+    r = tinfo(event="Atlantis")
+    assert "could not find an event matching Atlantis" in r["say"] and "Einstein Field in 2026" in r["say"]
+    assert "error" not in r
+
+
+def test_season_summary_for_a_past_year():
+    r = tinfo(year=2019)
+    assert r["say"].startswith("In 2019, team 2491 played 3 events.")
+    assert_clean(r, 60)
+    assert len(r["events"]) == 3 and r["events"][0]["rank"] == 9
+    print("SAY season 2019:", r["say"])
+    r = tinfo(year=2026)
+    assert "won the event" in r["say"] or "Best was" in r["say"]
+    assert_clean(r, 60)
+    print("SAY season 2026:", r["say"])
+    assert tinfo(year=1999)["say"] == "I have no events on record for team 2491 in 1999."
+
+
+def test_career_summary_all():
+    r = tinfo(detail="all")
+    assert r["seasons"] == 4 and r["events"] == len(EV) and r["event_wins"] == 2 and r["finalist"] == 1
+    assert r["championship_wins"] == [2026] and r["awards"]["Engineering Inspiration"] == 1
+    assert [c["year"] for c in r["championships"]] == [2026, 2019]
+    s = r["say"]
+    assert s.index("won the Championship") < s.index("won 2 events") < s.index("went to the Championship 2 times")
+    assert_clean(r, 70)
+    print("SAY career:", s)
+    assert tinfo(detail="everything")["seasons"] == 4
+
+
+def test_default_summary_covers_all_latest_season_events():
+    r = tinfo()
+    assert "In 2026 they played 4 events." in r["say"]
+    assert "Lake Superior Regional" in r["say"] or "Best was" in r["say"]
+    assert r["name"] == "NoMythic" and "results_2026" in r and "recent_awards" in r
+    assert_clean(r, 60)
+    print("SAY default:", r["say"])
+
+
+def test_team_lookup_say_lengths_no_secrets_and_cached():
+    calls = []
+    f = FRC(cfg(frc_team="", frc_event="", tba_api_key="SECRET-TBA-KEY"), http_get=lambda *a, **k: None,
+            http_get_cond=team_http(calls))
+    battery = ({}, {"year": 2019}, {"event": "Duluth"}, {"detail": "all"}, {"event": "champs"})
+    for args in battery:
+        r = f.handle("frc_team_info", {"team": "2491", **args})
+        assert_clean(r, 70)
+        assert "SECRET" not in str(r)
+    # every lookup went through _tba -> cache: repeating the whole battery makes no new HTTP calls
+    n = len(calls)
+    for args in battery:
+        f.handle("frc_team_info", {"team": "2491", **args})
+    assert len(calls) == n and len(f._cache) > 5
+    assert not any("nexus" in c for c in calls)
+
+
+def test_event_and_year_args_via_python_api_and_bad_input():
+    f = FRC(cfg(frc_team="2491"), http_get=lambda *a, **k: None, http_get_cond=team_http())
+    assert f.team_info("frc2491", "2019")["year"] == 2019            # year as string, "frc" prefix
+    assert f.team_info("", event="Duluth")["team"] == "2491"           # default team
+    assert f.team_info("abc")["error"]
