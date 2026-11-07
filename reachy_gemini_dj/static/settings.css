@@ -1,5 +1,5 @@
 /* Styles for #robot-panel and #settings-panel. Inherit host theme via CSS variables. */
-#robot-panel, #settings-panel {
+#robot-panel, #settings-panel, #acc-experimental {
   --p-bg: var(--bg, #f6f7f9);
   --p-fg: var(--ink, #1b1e24);
   --p-card: var(--card, #ffffff);
@@ -13,7 +13,7 @@
   box-sizing: border-box;
   display: block;
 }
-#robot-panel *, #settings-panel * { box-sizing: border-box; }
+#robot-panel *, #settings-panel *, #acc-experimental * { box-sizing: border-box; }
 
 .pn-card {
   background: var(--p-card); border: 1px solid var(--p-border); border-radius: 14px;
