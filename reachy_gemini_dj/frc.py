@@ -361,6 +361,7 @@ class FRC:
         return not (est and est / 1000 < (now or time.time()) - 600)
 
     def next_match(self, team: str) -> dict:
+        team = re.sub(r"\D", "", str(team or ""))   # only digits ever reach an API path
         ev = self._need_event()
         if not team:
             return {"error": "No team number set. Scan your Nexus QR code or set it in Settings."}

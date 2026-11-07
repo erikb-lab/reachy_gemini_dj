@@ -8,6 +8,7 @@ from __future__ import annotations
 import collections
 import datetime
 import logging
+import re
 import shutil
 import threading
 import time
@@ -385,6 +386,15 @@ class ReachyGeminiDJ(ReachyMiniApp):
             d = data.model_dump(exclude_unset=True)
             if d.get("brain_url") and not str(d["brain_url"]).strip().lower().startswith(("ws://", "wss://")):
                 return {"ok": False, "error": "Brain URL must start with ws:// or wss://"}
+            if d.get("frc_event") is not None:
+                d["frc_event"] = re.sub(r"\s+", "", str(d["frc_event"])).lower()
+                if d["frc_event"] and not re.fullmatch(r"[a-z0-9]{4,}", d["frc_event"]):
+                    return {"ok": False, "error": "Event code looks like 2026mndu (letters and digits only)"}
+            if d.get("frc_team") is not None:
+                d["frc_team"] = re.sub(r"\D", "", str(d["frc_team"]))
+            if d.get("brain_url") is not None and str(d["brain_url"]).strip() != (self.config.brain_url or "").strip():
+                # memory facts and your notes go to whichever brain this points at: make every change visible
+                self.record_event("security", f"Brain URL changed to {str(d['brain_url']).strip()}")
             if d.get("listen_mode") is not None and d["listen_mode"] not in LISTEN_MODES:
                 return {"ok": False, "error": "listen_mode must be one of: " + ", ".join(LISTEN_MODES)}
             if d.get("timezone") is not None and not set_timezone(str(d["timezone"]).strip()):

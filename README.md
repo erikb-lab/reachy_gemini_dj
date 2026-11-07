@@ -151,6 +151,8 @@ The undo steps are at the bottom of the script.
   the background. Every camera image sent to the brain shows up in the event feed, and so does every blocked request.
 - **Memory stays on the robot.** Remembered facts are stored on the robot and sent only to the brain (or Gemini)
   you configured, so it can use them. The app logs how many facts there are, never what they say.
+- **The brain gets your memory and notes.** Whoever controls the **Brain URL** setting receives remembered facts
+  and your extra instructions, so every change to it is shown in the event feed.
 - **Use a network you trust.** The Reachy Mini's own control pages, like this app's settings page and the
   push-to-talk endpoint, have no password. Anyone on the same Wi-Fi can change the settings. Keep the robot and the
   brain off guest or public networks.

@@ -62,6 +62,7 @@ class Config:
         data = asdict(self)
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.chmod(tmp, 0o600)          # holds API keys and the private Nexus link: owner-only
         os.replace(tmp, CONFIG_FILE)
 
     @classmethod

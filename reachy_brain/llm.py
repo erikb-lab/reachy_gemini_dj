@@ -60,7 +60,7 @@ class LlamaServer:
                    "--port", str(c.llm_port), "-t", str(c.llm_threads), "-c", str(c.llm_ctx * 2), "-np", "2",
                    "--no-kv-unified", "--cache-reuse", "256", "--reasoning", "off", "--no-webui"]
             if c.slot_cache_dir:
-                os.makedirs(self.slot_dir(), exist_ok=True)
+                os.makedirs(self.slot_dir(), mode=0o700, exist_ok=True)   # saved prompts: owner-only
                 cmd += ["--slot-save-path", self.slot_dir()]
             # slot 0 = the conversation, slot 1 = one-off camera questions. Separate KV per slot (--no-kv-unified)
             # is required: with a unified pool the camera request wiped slot 0 (measured: next turn 69 s vs 1.4 s). The

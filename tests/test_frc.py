@@ -618,3 +618,14 @@ def test_event_and_year_args_via_python_api_and_bad_input():
     assert f.team_info("frc2491", "2019")["year"] == 2019            # year as string, "frc" prefix
     assert f.team_info("", event="Duluth")["team"] == "2491"           # default team
     assert f.team_info("abc")["error"]
+
+
+def test_lookalike_hosts_and_odd_team_text_are_refused():
+    assert qr.parse_frc("https://evilfrc.nexus/2026mokc/254?key=x")["source"] == ""
+    assert qr.parse_frc("https://www.frc.nexus/2026mokc/254?key=x")["event"] == "2026mokc"
+    assert qr.parse_frc("https://notthebluealliance.com/team/254")["source"] == ""
+    now = time.time() * 1000
+    http = fake_http({"/event/2026mokc": nexus_event(now)})
+    f = FRC(cfg(frc_team="1234", frc_event="2026mokc"), http_get=http)
+    f.next_match("1/../../x?y")
+    assert all("/../" not in u and "?" not in u for u, _ in http.calls)

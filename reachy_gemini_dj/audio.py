@@ -227,7 +227,7 @@ class AudioPipeline:
         # Audio state
         self._muted = False
         self._user_speaking = False
-        self._last_user_speech = 0.0
+        self._last_user_speech = -1e9        # "never": monotonic() is time since boot, so 0.0 would look recent
 
         # Adaptive noise floor & echo suppression
         self.noise_floor = 0.012
