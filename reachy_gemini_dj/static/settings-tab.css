@@ -163,3 +163,27 @@
 #p-settings .sp-ro + .hint{margin:12px 0 0}
 #eq-card > .sub{margin-bottom:16px}
 #p-settings .sw label br{display:none}
+
+/* ---------- sub-tabs (settings-nav.js): one group of sections at a time ---------- */
+#p-settings .sn-off{display:none !important}
+#p-settings > .sn-nav{order:0}
+.sn-list{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px}
+.sn-list::-webkit-scrollbar{display:none}
+.sn-tab{flex:0 0 auto;min-height:40px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+.sn-tab:hover{border-color:var(--accent)}
+.sn-tab[aria-selected=true]{background:var(--soft);border-color:var(--accent);color:var(--accent)}
+@media (max-width:759.98px){.sn-tab{min-height:44px}}
+/* desktop: section list on the left, the chosen group on the right */
+@media (min-width:1100px){
+  #p-settings:not(.hide){display:grid;grid-template-columns:200px minmax(0,760px);column-gap:24px;row-gap:0;
+    justify-content:center;align-items:start;max-width:none}
+  /* every section in column 2 (layout.css has older full-width rules for accordions and Memory; the
+     #settings-panel cards are grid items too because the panel is display:contents) */
+  #p-settings > *, #p-settings #settings-panel > *{grid-column:2 !important;margin:0 0 16px !important}
+  #p-settings > .sn-nav{grid-column:1 !important;grid-row:1 / span 6;position:sticky;top:72px;align-self:start}
+  .sn-list{flex-direction:column;overflow:visible;gap:4px;padding:0}
+  .sn-tab{width:100%;text-align:left;border-radius:10px;border-color:transparent;background:transparent;color:var(--mut)}
+  .sn-tab:hover{background:var(--card);border-color:var(--line);color:var(--ink)}
+  .sn-tab[aria-selected=true]{background:var(--soft);border-color:transparent;color:var(--accent)}
+}
