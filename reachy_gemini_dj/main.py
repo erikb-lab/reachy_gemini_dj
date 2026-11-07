@@ -84,6 +84,25 @@ class PttRequest(BaseModel):
     down: bool
 
 
+class MusicPlayRequest(BaseModel):
+    query: str
+
+
+class MusicQueueRequest(BaseModel):
+    action: str
+    which: str = ""
+    id: int | None = None
+
+
+class MusicFavoriteRequest(BaseModel):
+    action: str
+    id: str = ""
+
+
+class MusicSeekRequest(BaseModel):
+    to: str
+
+
 class MuteUpdate(BaseModel):
     muted: bool
 
@@ -407,9 +426,6 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return {"ok": True}
 
         # Music endpoints
-        class MusicPlayRequest(BaseModel):
-            query: str
-
         @app.post("/api/music/play")
         def music_play(req: MusicPlayRequest):
             return self.music.play(req.query, added_by="controller")
@@ -431,11 +447,6 @@ class ReachyGeminiDJ(ReachyMiniApp):
             return self.music.stop()
 
         # Queue / favorites / seek (music_queue.js)
-        class MusicQueueRequest(BaseModel):
-            action: str
-            which: str = ""
-            id: int | None = None
-
         @app.post("/api/music/queue")
         def music_queue(req: MusicQueueRequest):
             if req.action == "remove" and req.id is not None:
@@ -449,10 +460,6 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 self.config.save()
             return res
 
-        class MusicFavoriteRequest(BaseModel):
-            action: str
-            id: str = ""
-
         @app.post("/api/music/favorite")
         def music_favorite(req: MusicFavoriteRequest):
             return self.music.favorite(req.action, req.id)
@@ -461,9 +468,6 @@ class ReachyGeminiDJ(ReachyMiniApp):
         def music_favorites():
             from . import favorites
             return {"favorites": favorites.load()}
-
-        class MusicSeekRequest(BaseModel):
-            to: str
 
         @app.post("/api/music/seek")
         def music_seek(req: MusicSeekRequest):
