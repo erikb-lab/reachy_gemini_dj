@@ -215,15 +215,41 @@ def test_ghost_transcript_is_ignored():
 
 
 def test_noise_while_thinking_does_not_cancel_the_turn_but_speech_over_reply_does():
+    from types import SimpleNamespace
+    from reachy_brain.session import BARGE_IN_VOICED_FRAMES
     s, llm, sent, _ = make([])
     s._busy = True
-    s.seg.feed = lambda pcm: [("start", None)]
+    seg = SimpleNamespace(speaking=True, voiced_frames=3, events=[("start", None)])
+    seg.feed = lambda pcm: seg.events
+    s.seg = seg
     s.on_audio(b"\0")
     assert not s._cancel.is_set()                 # transcribing / thinking: keep going
     s._speaking = True
+    s.on_audio(b"\0")                             # speech starts over the reply ...
+    assert not s._cancel.is_set()                 # ... but a short blip (its own echo) is not enough
+    seg.events, seg.voiced_frames = [], BARGE_IN_VOICED_FRAMES
     s.on_audio(b"\0")
-    assert s._cancel.is_set()                     # user talks over the spoken reply: interrupt
+    assert s._cancel.is_set()                     # sustained speech over the spoken reply: interrupt
     s._busy = False
+    s.close()
+
+
+def test_word_loops_and_echo_are_ignored():
+    import time
+    from reachy_brain.session import echo_overlap, looks_hallucinated
+    assert looks_hallucinated("Wow, cool, cool. Good. Yes, cool. Yes, cool. Yes, cool. Yes, cool.")
+    assert not looks_hallucinated("Remember that our pit is A3 and our robot is Zippy.")
+    said = "Team 2491 is No Mythic, from Minnesota. They started in 2008."
+    assert echo_overlap("team 2491 is no mythic from minnesota", said) >= 0.6
+    assert echo_overlap("what time is our next match", said) < 0.6
+    s, llm, sent, _ = make([])
+    now = time.monotonic()
+    s._said_recent, s._play_end = [(now - 2, said)], now + 3
+    assert s._reject_reason("They started in 2008, from Minnesota.", now - 1) == "echo of Reachy's own voice"
+    assert s._reject_reason("They started in 2008, from Minnesota.", now + 60) == ""   # long after: a real question
+    assert s._reject_reason("Yes, cool. Yes, cool. Yes, cool.", now) == "repeated words"
+    assert s._reject_reason("Thanks for watching!", now) == "ghost phrase"
+    assert s._reject_reason("Tell me about team 254.", now - 1) == ""
     s.close()
 
 

@@ -159,6 +159,27 @@ def say_of(res: Any) -> str:
     return ""
 
 
+_WORDS = re.compile(r"[a-z0-9']+")
+
+
+def looks_hallucinated(text: str) -> bool:
+    """Whisper on noise or music often loops one or two words ("yes, cool. yes, cool. yes, cool.")."""
+    words = _WORDS.findall(text.lower())
+    return len(words) >= 6 and len(set(words)) / len(words) < 0.45
+
+
+def echo_overlap(heard: str, said: str) -> float:
+    """Share of the heard words that Reachy itself just said (its own voice picked up by the mic)."""
+    h = [w for w in _WORDS.findall(heard.lower()) if len(w) > 2]
+    if len(h) < 3:
+        return 0.0
+    s = set(_WORDS.findall(said.lower()))
+    return sum(w in s for w in h) / len(h)
+
+
+BARGE_IN_VOICED_FRAMES = 12   # ~360 ms of speech before Reachy stops talking: a blip of its own echo is not enough
+
+
 def _failed(res: Any) -> bool:
     return not isinstance(res, dict) or "error" in res
 
@@ -181,6 +202,11 @@ class BrainSession:
         self._cancel = threading.Event()
         self._busy = False
         self._speaking = False
+        self._play_end = 0.0                        # when the robot finishes playing what was sent (monotonic)
+        self._said_recent: list[tuple[float, str]] = []   # (time, text) Reachy spoke, for echo rejection
+        self._barge_pending = False
+        self._utt_start = 0.0
+        self._utt_starts: dict[int, float] = {}
         self._pending: dict[str, tuple[threading.Event, list]] = {}
         self._closed = threading.Event()
         self._worker = threading.Thread(target=self._run, daemon=True, name="brain-turns")
@@ -207,11 +233,20 @@ class BrainSession:
         for kind, payload in self.seg.feed(pcm):
             if kind == "start":
                 self.send_json({"type": "user_start"})
-                if self._busy and self._speaking:
-                    self.barge_in()          # only interrupt once Reachy is actually talking; a blip while it is
-                                             # still transcribing/thinking must not throw the question away
+                self._utt_start = time.monotonic()
+                # only interrupt once Reachy is actually talking (a blip while it is still transcribing/thinking
+                # must not throw the question away), and only after real speech, not a short echo of its own voice
+                self._barge_pending = self._busy and self._speaking
             elif kind == "utterance":
+                self._barge_pending = False
+                self._utt_starts[id(payload)] = self._utt_start
                 self._utts.put(payload)
+            elif kind == "cancel":
+                self._barge_pending = False
+        if self._barge_pending and self.seg.speaking and self.seg.voiced_frames >= BARGE_IN_VOICED_FRAMES:
+            self._barge_pending = False
+            if self._busy and self._speaking:
+                self.barge_in()
 
     def on_tool_result(self, msg: dict) -> None:
         slot = self._pending.get(msg.get("id", ""))
@@ -324,11 +359,14 @@ class BrainSession:
             return
         self.send_json({"type": "said", "text": text})
         self._speaking = True
+        now = time.monotonic()
+        self._said_recent = [(t, x) for t, x in self._said_recent if now - t < 30] + [(now, text)]
         for chunk in self.tts.stream(speakable(text)):
             if self._cancel.is_set():
                 return
             pcm = (np.clip(chunk, -1.0, 1.0) * 32767).astype("<i2").tobytes()
             self.send_audio(pcm)
+            self._play_end = max(time.monotonic(), self._play_end) + len(pcm) / 2 / 24000
 
     # ---------- turn worker ----------
     def _run(self) -> None:
@@ -400,11 +438,30 @@ class BrainSession:
                 log.info("prompt cache save failed: %s", e)
         self._state("listening")
 
+    def _reject_reason(self, heard: str, started: float) -> str:
+        """Why a transcript is not a real request ("" = it is). Ghost phrases and word loops come from Whisper
+        hearing noise or music; echo is Reachy's own voice picked up by the mic while it was talking."""
+        core = (heard or "").strip(" .,!?")
+        if len(core) < 2:
+            return "empty"
+        if core.lower() in GHOST_TRANSCRIPTS:
+            return "ghost phrase"
+        if looks_hallucinated(heard):
+            return "repeated words"
+        if started and started < self._play_end + 1.0:
+            said = " ".join(x for t, x in self._said_recent if t >= started - 30)
+            if echo_overlap(heard, said) >= 0.6:
+                return "echo of Reachy's own voice"
+        return ""
+
     def _turn(self, audio: np.ndarray) -> None:
         t0 = time.time()
         self._state("thinking", "transcribing")
+        started = self._utt_starts.pop(id(audio), 0.0)
         heard = self.stt.transcribe(audio)
-        if not heard or len(heard.strip(" .,!?")) < 2 or heard.strip(" .,!?").lower() in GHOST_TRANSCRIPTS:
+        reason = self._reject_reason(heard, started)
+        log.info("stt: %r%s", heard, f" -> ignored ({reason})" if reason else "")
+        if reason:
             return
         self.send_json({"type": "heard", "text": heard})
         quick = quick_command(heard)
