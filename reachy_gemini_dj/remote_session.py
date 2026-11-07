@@ -32,6 +32,7 @@ RECENT_SPEECH_S = 120.0
 
 class RemoteSession:
     name = "local"
+    get_memory: Callable[[], list[str]] | None = None      # set by main.py: the owner's remembered facts (memory.py)
 
     def __init__(self, config, execute_tool: Callable[[str, dict], dict], on_event: Callable[[str, str], None],
                  on_voice_chunk: Callable[[bytes], None] | None = None, on_barge_in: Callable[[], None] | None = None,
@@ -131,9 +132,14 @@ class RemoteSession:
         assist = bool(getattr(c, "allow_gemini_assist", True) and c.api_key)
         self._advertised = {t["name"] for t in tools} | ({"ask_gemini"} if assist else set())
         # The Gemini key is never sent: with assist_on_robot the brain asks the robot, which calls Gemini itself.
-        return {"type": "hello", "client": "reachy_gemini_dj", "tools": tools,
-                "extra_instructions": c.extra_instructions or "",
-                "allow_gemini_assist": bool(getattr(c, "allow_gemini_assist", True)), "assist_on_robot": assist}
+        hello = {"type": "hello", "client": "reachy_gemini_dj", "tools": tools,
+                 "extra_instructions": c.extra_instructions or "",
+                 "allow_gemini_assist": bool(getattr(c, "allow_gemini_assist", True)), "assist_on_robot": assist}
+        try:
+            hello["memory"] = list(self.get_memory()) if self.get_memory else []
+        except Exception:
+            hello["memory"] = []
+        return hello
 
     def _recently_asked(self) -> bool:
         try:
