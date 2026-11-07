@@ -7,9 +7,11 @@ to call from any thread. Robot-side tools (music, motion, calendar...) are execu
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import uuid
@@ -24,6 +26,50 @@ from .segmenter import Segmenter
 log = logging.getLogger(__name__)
 
 INFO_SERVER_TOOLS = set(SERVER_TOOLS)
+
+# Spoken instantly after a successful action tool when the model said nothing itself. Saves a whole extra LLM
+# round (several seconds on a CPU) that would only produce "ok, done".
+CANNED_ACK = {
+    "play_music": "Okay, queuing that up.", "pause_music": "Paused.", "resume_music": "Back to the music.",
+    "skip_music": "Skipping.", "stop_music": "Music stopped.", "set_volume": "Volume adjusted.",
+    "robot_emotion": "There you go.", "robot_dance": "Watch this!", "robot_look": "Looking.",
+    "robot_pose": "Moving.", "save_pose": "Pose saved.", "calendar_add": "Added to your calendar.",
+    "tasks_add": "Added to your tasks.", "tasks_complete": "Marked as done.",
+}
+
+
+# "play/queue something": the small model sometimes answers "sure, playing it" without calling the tool at all.
+# For these utterances the first round must be a tool call (spoken confirmation comes from CANNED_ACK).
+_MUSIC_INTENT = re.compile(r"\b(play|queue|put on|spin|throw on)\b(?!.*\b(game|role|trick|joke|part)\b)", re.I)
+
+
+# What Whisper "hears" in silence or room noise; never a real request.
+GHOST_TRANSCRIPTS = {"you", "thank you", "thanks", "thanks for watching", "bye", "bye bye", "the end"}
+
+
+# Music transport commands need no language model: match them directly (instant, and never mapped to the wrong tool).
+_QUICK = [
+    ("pause_music", "Paused.", re.compile(r"^(please |can you |could you )*(pause|hold)( the| this| that)?( music| song| track| it)?( please)?$")),
+    ("resume_music", "Back to the music.", re.compile(
+        r"^(please |can you |could you )*(resume|unpause|continue|keep going|play)( the| this| that)?"
+        r"( music| song| track| it)?( again| back)?( please)?$")),
+    ("skip_music", "Skipping.", re.compile(r"^(please |can you |could you )*(skip|next)( the| this| that)?( music| song| track| one)?( please)?$")),
+    ("stop_music", "Music stopped.", re.compile(r"^(please |can you |could you )*stop( the| this| that)?( music| song| track| playing)( please)?$")),
+]
+
+
+def quick_command(heard: str) -> tuple[str, str] | None:
+    """('tool_name', spoken ack) when the whole utterance is a bare music transport command, else None."""
+    t = re.sub(r"[^a-z' ]", " ", heard.lower())
+    t = " ".join(t.split())
+    for name, ack, rx in _QUICK:
+        if rx.match(t):
+            return name, ack
+    return None
+
+
+def _failed(res: Any) -> bool:
+    return not isinstance(res, dict) or "error" in res
 
 
 class BrainSession:
@@ -41,6 +87,7 @@ class BrainSession:
         self._utts: queue.Queue = queue.Queue()
         self._cancel = threading.Event()
         self._busy = False
+        self._speaking = False
         self._pending: dict[str, tuple[threading.Event, list]] = {}
         self._closed = threading.Event()
         self._worker = threading.Thread(target=self._run, daemon=True, name="brain-turns")
@@ -65,8 +112,9 @@ class BrainSession:
         for kind, payload in self.seg.feed(pcm):
             if kind == "start":
                 self.send_json({"type": "user_start"})
-                if self._busy:
-                    self.barge_in()
+                if self._busy and self._speaking:
+                    self.barge_in()          # only interrupt once Reachy is actually talking; a blip while it is
+                                             # still transcribing/thinking must not throw the question away
             elif kind == "utterance":
                 self._utts.put(payload)
 
@@ -159,6 +207,7 @@ class BrainSession:
         if self._cancel.is_set() or not text.strip():
             return
         self.send_json({"type": "said", "text": text})
+        self._speaking = True
         for chunk in self.tts.stream(text):
             if self._cancel.is_set():
                 return
@@ -197,18 +246,25 @@ class BrainSession:
                 self.send_json({"type": "error", "text": f"{type(e).__name__}: {e}"})
             finally:
                 self._busy = False
+                self._speaking = False
                 if not self._closed.is_set():
                     self.send_json({"type": "turn_done"})
                     self._state("listening")
 
     def _warm(self) -> None:
         """Process the system prompt and tool schemas once so the first real question is fast (otherwise the
-        first turn re-reads ~2k prompt tokens on a CPU, which took ~170 s in testing)."""
+        first turn re-reads ~2k prompt tokens on a CPU, which took ~170 s in testing).
+        llama-server keeps its prompt cache across connections, so a reconnect with the same prompt skips this."""
+        key = hashlib.sha1(json.dumps([self._system(), self._tools()], sort_keys=True).encode()).hexdigest()
+        if getattr(self.llm, "warm_key", None) == key:
+            log.info("LLM already warm for this prompt; skipping warm-up")
+            return
         self._state("loading", "warming up the language model")
         t0 = time.time()
         try:
             msgs = [{"role": "system", "content": self._system()}, {"role": "user", "content": "hi"}]
             self.llm.chat_stream(msgs, self._tools(), lambda c: None, threading.Event(), max_tokens=1)
+            self.llm.warm_key = key
             log.info("LLM warm-up took %.1fs", time.time() - t0)
         except Exception as e:
             log.warning("LLM warm-up failed: %s", e)
@@ -218,12 +274,26 @@ class BrainSession:
         t0 = time.time()
         self._state("thinking", "transcribing")
         heard = self.stt.transcribe(audio)
-        if not heard or len(heard.strip(" .,!?")) < 2:
+        if not heard or len(heard.strip(" .,!?")) < 2 or heard.strip(" .,!?").lower() in GHOST_TRANSCRIPTS:
             return
         self.send_json({"type": "heard", "text": heard})
+        quick = quick_command(heard)
+        if quick and any(t["function"]["name"] == quick[0] for t in self.robot_tools):
+            name, ack = quick
+            self.send_json({"type": "event", "kind": "tool", "text": f"{name} (voice shortcut)"})
+            res = self._robot_call(name, {}, self.cfg.tool_timeout_s)
+            say = ack if not _failed(res) else str((res or {}).get("error", "That didn't work."))[:120]
+            self._state("speaking")
+            self._speak(say)
+            self.history += [{"role": "user", "content": heard}, {"role": "assistant", "content": say}]
+            self.history = self.history[-2 * self.cfg.history_turns:]
+            log.info("turn: heard=%r shortcut=%s total=%.1fs", heard, name, time.time() - t0)
+            return
         msgs = [{"role": "system", "content": self._system()}, *self.history, {"role": "user", "content": heard}]
         tools = self._tools()
         choice, spoken_all, first_audio = "auto", [], [None]
+        if _MUSIC_INTENT.search(heard) and any(t["function"]["name"] == "play_music" for t in tools):
+            choice = "required"
 
         def on_clause(text: str) -> None:
             if first_audio[0] is None:
@@ -239,7 +309,7 @@ class BrainSession:
             if not calls:
                 break
             msgs.append({"role": "assistant", "content": content, "tool_calls": calls})
-            names = []
+            names, any_failed = [], False
             for c in calls:
                 name = c["function"]["name"]
                 names.append(name)
@@ -254,11 +324,17 @@ class BrainSession:
                                           look=self._look)
                 else:
                     res = self._robot_call(name, args, self.cfg.tool_timeout_s)
+                any_failed = any_failed or _failed(res)
                 msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res)[:4000]})
+            if choice == "required":
+                choice = "auto"                  # forced only for the first round
             if any(n in INFO_SERVER_TOOLS or self.robot_kinds.get(n) == "info" for n in names):
                 choice = "none"                  # answer from the result; no second lookup
             elif content.strip():
                 break                            # already spoke and only action tools ran: done
+            elif not any_failed and all(n in CANNED_ACK for n in names):
+                on_clause(CANNED_ACK[names[0]])  # nothing said yet: confirm instantly, skip another LLM round
+                break
         reply = " ".join(spoken_all).strip()
         self.history += [{"role": "user", "content": heard}, {"role": "assistant", "content": reply or "(done)"}]
         self.history = self.history[-2 * self.cfg.history_turns:]

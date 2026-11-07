@@ -158,3 +158,91 @@ def test_robot_say_is_spoken_without_llm():
     assert [m["text"] for m in sent if m.get("type") == "said"] == ["Heads up! Qualification 12 is now queuing."]
     assert audio and llm.calls == []
     s.close()
+
+
+def test_action_tool_without_speech_gets_canned_ack_and_no_second_round():
+    s, llm, sent, _ = make([([], [("play_music", '{"query": "lofi"}')])])
+    run_turn(s, sent)
+    assert len(llm.calls) == 1
+    assert [m["text"] for m in sent if m.get("type") == "said"] == ["Okay, queuing that up."]
+    s.close()
+
+
+def test_failed_action_tool_still_asks_the_model():
+    s, llm, sent, _ = make([([], [("play_music", "{}")]), (["Sorry, that did not work."], [])],
+                           robot={"play_music": {"error": "nothing found"}})
+    run_turn(s, sent)
+    assert len(llm.calls) == 2
+    assert [m["text"] for m in sent if m.get("type") == "said"] == ["Sorry, that did not work."]
+    s.close()
+
+
+def test_reconnect_with_same_prompt_skips_warmup():
+    s, llm, sent, _ = make([])
+    time.sleep(0.2)
+    assert llm.warmups == 1
+    s.on_hello({"tools": s_tools(s)})
+    time.sleep(0.2)
+    assert llm.warmups == 1
+    s.close()
+
+
+def s_tools(s):
+    return [{"name": t["function"]["name"], "description": t["function"]["description"], "kind": s.robot_kinds[t["function"]["name"]],
+             "parameters": t["function"]["parameters"]} for t in s.robot_tools]
+
+
+def test_play_request_forces_a_tool_call_first():
+    s, llm, sent, _ = make([([], [("play_music", '{"query": "daft punk"}')])], heard="Please queue some daft punk.")
+    run_turn(s, sent)
+    assert llm.calls[0]["choice"] == "required"
+    assert any(m.get("type") == "tool_call" and m["name"] == "play_music" for m in sent)
+    s.close()
+
+
+def test_chat_is_not_forced_to_use_a_tool():
+    s, llm, sent, _ = make([(["Ha."], [])], heard="tell me a joke about a game show")
+    run_turn(s, sent)
+    assert llm.calls[0]["choice"] == "auto"
+    s.close()
+
+
+def test_ghost_transcript_is_ignored():
+    s, llm, sent, _ = make([], heard="You.")
+    run_turn(s, sent)
+    assert llm.calls == [] and not any(m.get("type") == "heard" for m in sent)
+    s.close()
+
+
+def test_noise_while_thinking_does_not_cancel_the_turn_but_speech_over_reply_does():
+    s, llm, sent, _ = make([])
+    s._busy = True
+    s.seg.feed = lambda pcm: [("start", None)]
+    s.on_audio(b"\0")
+    assert not s._cancel.is_set()                 # transcribing / thinking: keep going
+    s._speaking = True
+    s.on_audio(b"\0")
+    assert s._cancel.is_set()                     # user talks over the spoken reply: interrupt
+    s._busy = False
+    s.close()
+
+
+def test_quick_command_matching():
+    from reachy_brain.session import quick_command
+    assert quick_command("Please pause the music.")[0] == "pause_music"
+    assert quick_command("Please play the music.")[0] == "resume_music"
+    assert quick_command("Resume.")[0] == "resume_music"
+    assert quick_command("Skip this song")[0] == "skip_music"
+    assert quick_command("Can you stop the music?")[0] == "stop_music"
+    assert quick_command("play some daft punk") is None
+    assert quick_command("pause for a moment and tell me a joke") is None
+
+
+def test_pause_by_voice_skips_the_llm():
+    s, llm, sent, _ = make([], heard="Please pause the music.")
+    s.on_hello({"tools": [{"name": "pause_music", "description": "x", "kind": "action"}]})
+    run_turn(s, sent)
+    assert llm.calls == []
+    assert any(m.get("type") == "tool_call" and m["name"] == "pause_music" for m in sent)
+    assert [m["text"] for m in sent if m.get("type") == "said"] == ["Paused."]
+    s.close()
