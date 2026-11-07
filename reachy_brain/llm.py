@@ -56,8 +56,11 @@ class LlamaServer:
             if not c.model_path:
                 raise RuntimeError("no --model (or --llama-url) given for the LLM")
             cmd = [c.llama_server_bin, "-m", c.model_path, "--alias", "brain", "--host", "127.0.0.1",
-                   "--port", str(c.llm_port), "-t", str(c.llm_threads), "-c", str(c.llm_ctx), "-np", "1",
-                   "--reasoning", "off", "--no-webui"]
+                   "--port", str(c.llm_port), "-t", str(c.llm_threads), "-c", str(c.llm_ctx * 2), "-np", "2",
+                   "--no-kv-unified", "--cache-reuse", "256", "--reasoning", "off", "--no-webui"]
+            # slot 0 = the conversation, slot 1 = one-off camera questions. Separate KV per slot (--no-kv-unified)
+            # is required: with a unified pool the camera request wiped slot 0 (measured: next turn 69 s vs 1.4 s). The
+            # conversation's cached prompt; --cache-reuse keeps the cache usable when old turns are trimmed
             if c.mmproj_path:
                 cmd += ["--mmproj", c.mmproj_path]
             log.info("starting llama-server: %s", " ".join(cmd))
@@ -97,7 +100,8 @@ class LlamaServer:
         """Stream one completion. Returns (spoken_text, tool_calls). on_clause gets each speakable clause."""
         c = self.cfg
         body: dict[str, Any] = {"messages": messages, "temperature": c.temperature, "top_p": c.top_p,
-                                "max_tokens": max_tokens or c.max_tokens, "stream": True}
+                                "max_tokens": max_tokens or c.max_tokens, "stream": True, "id_slot": 0,
+                                "cache_prompt": True}
         if tools:
             body["tools"] = tools
             body["tool_choice"] = tool_choice
@@ -136,7 +140,7 @@ class LlamaServer:
         body = {"messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + jpeg_b64}},
             {"type": "text", "text": question or "Describe what you see in one or two short sentences."}]}],
-            "max_tokens": 120, "temperature": 0.3}
+            "max_tokens": 120, "temperature": 0.3, "id_slot": 1}
         r = httpx.post(self.base + "/v1/chat/completions", json=body, timeout=300)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()

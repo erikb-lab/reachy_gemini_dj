@@ -246,3 +246,41 @@ def test_pause_by_voice_skips_the_llm():
     assert any(m.get("type") == "tool_call" and m["name"] == "pause_music" for m in sent)
     assert [m["text"] for m in sent if m.get("type") == "said"] == ["Paused."]
     s.close()
+
+
+def test_forced_tool_intents():
+    from reachy_brain.session import forced_tool
+    allt = {"look", "get_weather", "web_search", "frc_team_info", "frc_next_match", "frc_rankings", "robot_emotion",
+            "robot_dance", "play_music"}
+    assert forced_tool("What do you see in front of you?", allt) == "look"
+    assert forced_tool("Tell me about Team 1678.", allt) == "frc_team_info"
+    assert forced_tool("Show me that you're really happy.", allt) == "robot_emotion"
+    assert forced_tool("Who won the World Series this year?", allt) == "web_search"
+    assert forced_tool("What's the weather like in Chicago right now?", allt) == "get_weather"
+    assert forced_tool("Play some daft punk.", allt) == "play_music"
+    assert forced_tool("Tell me a quick joke.", allt) is None
+    assert forced_tool("What do you see?", allt - {"look"}) is None       # no camera: let the model say so
+
+
+def test_history_keeps_tool_calls_so_actions_are_visible_to_the_model():
+    s, llm, sent, _ = make([([], [("play_music", '{"query": "lofi"}')]), (["Hi."], [])])
+    run_turn(s, sent)
+    sent.clear()
+    run_turn(s, sent)
+    roles = [m["role"] for m in llm.calls[1]["msgs"]]
+    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
+    assert llm.calls[0]["choice"] == "required"
+    assert "Call play_music first" in llm.calls[0]["msgs"][-1]["content"]
+    assert llm.calls[1]["msgs"][1] == llm.calls[0]["msgs"][-1]        # sent exactly as before: prompt cache stays valid
+    s.close()
+
+
+def test_history_trims_old_turns_in_one_go():
+    s, llm, sent, _ = make([])
+    s.cfg.history_chars = 1000
+    for i in range(30):
+        s._remember([{"role": "user", "content": f"q{i} " + "x" * 80}, {"role": "assistant", "content": "a"}])
+    total = sum(len(__import__("json").dumps(m)) for m in s.history)
+    assert total <= 1000 and len(s.turns) >= 3
+    assert s.turns[-1][0]["content"].startswith("q29")
+    s.close()

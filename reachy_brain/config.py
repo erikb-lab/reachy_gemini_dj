@@ -21,7 +21,8 @@ class BrainConfig:
     mmproj_path: str = ""
     llm_port: int = 8089
     llm_threads: int = 4
-    llm_ctx: int = 6144
+    llm_ctx: int = 6144             # per conversation; llama-server gets llm_ctx * 2 (chat slot + vision slot)
+    history_chars: int = 9000       # trim old turns (in one go, down to 60%) past this many characters
     max_tokens: int = 200
     temperature: float = 0.7
     top_p: float = 0.8
@@ -35,8 +36,8 @@ class BrainConfig:
     vad_aggressiveness: int = 2
     end_silence_ms: int = 650
     max_utterance_s: float = 20.0
-    history_turns: int = 6
     tool_timeout_s: float = 45.0
+    tool_result_chars: int = 1500
     # Gemini help for hard questions (the key can also arrive from the robot app in its hello message)
     gemini_api_key: str = ""
     assist_model: str = "gemini-2.5-flash"

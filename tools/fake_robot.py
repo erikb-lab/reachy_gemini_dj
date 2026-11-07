@@ -22,13 +22,29 @@ def load16k(path):
     return (np.clip(a, -1, 1) * 32767).astype("<i2").tobytes()
 
 
+# Stub answers for robot-side tools (what the real app would return), so the brain's spoken replies are realistic
+STUBS = {
+    "frc_team_info": {"team": "1678", "name": "Citrus Circuits", "from": "Davis, California", "rookie_year": 2005,
+                      "results_2025": [{"event": "Sacramento Regional", "qual_rank": 1, "record": "11-1-0",
+                                        "playoffs": "f"}]},
+    "frc_next_match": {"team": "1678", "next_match": "Qualification 12", "status": "Queuing soon",
+                       "estimated_start": "in about 15 minutes", "alliance": "red"},
+}
+
+
 async def main(url, out, wavs):
+    import base64
+    import os
     import websockets
     from reachy_gemini_dj.tool_schemas import robot_tool_specs
+    frame_b64 = ""
+    if os.environ.get("FRAME_JPEG"):
+        frame_b64 = base64.b64encode(Path(os.environ["FRAME_JPEG"]).read_bytes()).decode()
+    lean = os.environ.get("LEAN") == "1"
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     results = []
     async with websockets.connect(url, max_size=8 << 20) as ws:
-        await ws.send(json.dumps({"type": "hello", "tools": robot_tool_specs(), "allow_gemini_assist": False}))
+        await ws.send(json.dumps({"type": "hello", "tools": robot_tool_specs(google_services=set(), frc_enabled=True) if lean else robot_tool_specs(), "allow_gemini_assist": False}))
         for w in wavs:
             pcm = load16k(w) + bytes(16000 * 2)          # speech + 1 s silence to close the utterance
             rec = {"wav": Path(w).name, "events": [], "tools": []}
@@ -57,10 +73,11 @@ async def main(url, out, wavs):
                     rec["events"].append([t, m.get("text")])
                 elif t == "tool_call":
                     rec["tools"].append([m["name"], m.get("args")])
-                    res = {"result": f"Queued: {m['args'].get('query', '')}"} if m["name"] == "play_music" else {"result": "done"}
+                    res = STUBS.get(m["name"]) or ({"result": f"Queued: {m['args'].get('query', '')}"}
+                                                   if m["name"] == "play_music" else {"result": "done"})
                     await ws.send(json.dumps({"type": "tool_result", "id": m["id"], "result": res}))
                 elif t == "request_frame":
-                    await ws.send(json.dumps({"type": "frame", "id": m["id"], "jpeg_b64": ""}))
+                    await ws.send(json.dumps({"type": "frame", "id": m["id"], "jpeg_b64": frame_b64}))
                 elif t == "turn_done" and st.done():
                     break
             await st

@@ -44,6 +44,35 @@ CANNED_ACK = {
 _MUSIC_INTENT = re.compile(r"\b(play|queue|put on|spin|throw on)\b(?!.*\b(game|role|trick|joke|part)\b)", re.I)
 
 
+# Requests the small model tends to "answer" by making things up instead of calling the tool (seen in the laptop
+# end-to-end test: it described an imaginary room, invented a World Series winner and team facts, and said it was
+# showing an emotion without moving). For these the first round must be a tool call, and a hint names the tool.
+# (The tool list itself is never changed between rounds: that would throw away llama-server's prompt cache.)
+_INTENTS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\b(what (do|can) you see|what are you (looking at|seeing)|look at (this|that|me|it)|in front of you|"
+                r"what('s| is) (this|that) (thing|i'm holding)|read (this|that|it)|can you see)\b", re.I), "look"),
+    (re.compile(r"\b(weather|temperature|forecast|raining|snowing)\b", re.I), "get_weather"),
+    (re.compile(r"\b(next match|queu(e|ing) (status|now)|when do we play)\b", re.I), "frc_next_match"),
+    (re.compile(r"\b(team|frc)\s*\d{1,5}\b|\babout (our|my) team\b", re.I), "frc_team_info"),
+    (re.compile(r"\b(ranking|rankings|who is (in )?first)\b", re.I), "frc_rankings"),
+    (re.compile(r"\bdance\b", re.I), "robot_dance"),
+    (re.compile(r"\b(show|act|look|be|get)\b.{0,25}\b(happy|sad|angry|surprised|excited|scared|tired|confused|"
+                r"curious|bored|proud|shy|love)\b", re.I), "robot_emotion"),
+    (re.compile(r"\b(who won|latest|news|search|look up|this year|this season|current(ly)?|today'?s)\b", re.I),
+     "web_search"),
+]
+
+
+def forced_tool(heard: str, available: set[str]) -> str | None:
+    """Name of the tool this request must start with, or None to let the model decide."""
+    for rx, name in _INTENTS:
+        if rx.search(heard) and name in available:
+            return name
+    if _MUSIC_INTENT.search(heard) and "play_music" in available:
+        return "play_music"
+    return None
+
+
 # What Whisper "hears" in silence or room noise; never a real request.
 GHOST_TRANSCRIPTS = {"you", "thank you", "thanks", "thanks for watching", "bye", "bye bye", "the end"}
 
@@ -84,7 +113,7 @@ class BrainSession:
         self.gemini_key = cfg.gemini_api_key
         self.allow_assist = True
         self.vision = bool(cfg.mmproj_path)
-        self.history: list[dict] = []
+        self.turns: list[list[dict]] = []          # past turns, each the full message list incl. tool calls
         self._utts: queue.Queue = queue.Queue()
         self._cancel = threading.Event()
         self._busy = False
@@ -142,7 +171,7 @@ class BrainSession:
 
     def new_conversation(self) -> None:
         self.barge_in()
-        self.history.clear()
+        self.turns.clear()
 
     def close(self) -> None:
         self._closed.set()
@@ -154,6 +183,20 @@ class BrainSession:
     # ---------- helpers ----------
     def _state(self, s: str, detail: str = "") -> None:
         self.send_json({"type": "state", "state": s, "detail": detail})
+
+    @property
+    def history(self) -> list[dict]:
+        return [m for t in self.turns for m in t]
+
+    def _remember(self, msgs: list[dict]) -> None:
+        """Keep a finished turn exactly as it was sent (tool calls and hints included): any change to past
+        messages would invalidate llama-server's prompt cache and cost tens of seconds per turn on a CPU.
+        Old turns are dropped in one go (down to 60% of the budget) so the cache breaks rarely."""
+        self.turns.append([dict(m) for m in msgs])
+        size = lambda: sum(len(json.dumps(m)) for t in self.turns for m in t)
+        if size() > self.cfg.history_chars:
+            while len(self.turns) > 1 and size() > self.cfg.history_chars * 0.6:
+                self.turns.pop(0)
 
     def _assist_on(self) -> bool:
         return bool(self.allow_assist and self.gemini_key)
@@ -236,8 +279,7 @@ class BrainSession:
                 if isinstance(audio, tuple):      # ("say", text)
                     self._state("speaking")
                     self._speak(audio[1])
-                    self.history += [{"role": "assistant", "content": audio[1]}]
-                    self.history = self.history[-2 * self.cfg.history_turns:]
+                    self._remember([{"role": "assistant", "content": audio[1]}])
                 else:
                     self._turn(audio)
             except Cancelled:
@@ -286,15 +328,23 @@ class BrainSession:
             say = ack if not _failed(res) else str((res or {}).get("error", "That didn't work."))[:120]
             self._state("speaking")
             self._speak(say)
-            self.history += [{"role": "user", "content": heard}, {"role": "assistant", "content": say}]
-            self.history = self.history[-2 * self.cfg.history_turns:]
+            cid = "q" + uuid.uuid4().hex[:8]
+            self._remember([{"role": "user", "content": heard},
+                            {"role": "assistant", "content": "", "tool_calls": [
+                                {"id": cid, "type": "function", "function": {"name": name, "arguments": "{}"}}]},
+                            {"role": "tool", "tool_call_id": cid, "content": json.dumps(res)},
+                            {"role": "assistant", "content": say}])
             log.info("turn: heard=%r shortcut=%s total=%.1fs", heard, name, time.time() - t0)
             return
-        msgs = [{"role": "system", "content": self._system()}, *self.history, {"role": "user", "content": heard}]
         tools = self._tools()
         choice, spoken_all, first_audio = "auto", [], [None]
-        if _MUSIC_INTENT.search(heard) and any(t["function"]["name"] == "play_music" for t in tools):
+        force = forced_tool(heard, {t["function"]["name"] for t in tools})
+        user_msg = {"role": "user", "content": heard}
+        if force:
             choice = "required"
+            user_msg = {"role": "user", "content": f"{heard}\n(Call {force} first. Do not answer from memory.)"}
+        msgs = [{"role": "system", "content": self._system()}, *self.history, user_msg]
+        base = len(msgs) - 1
 
         def on_clause(text: str) -> None:
             if first_audio[0] is None:
@@ -303,11 +353,13 @@ class BrainSession:
             spoken_all.append(text)
             self._speak(text)
 
+        final = ""
         for _ in range(3):
             if self._cancel.is_set():
                 raise Cancelled()
             content, calls = self.llm.chat_stream(msgs, tools, on_clause, self._cancel, tool_choice=choice)
             if not calls:
+                final = content
                 break
             msgs.append({"role": "assistant", "content": content, "tool_calls": calls})
             names, any_failed = [], False
@@ -326,7 +378,7 @@ class BrainSession:
                 else:
                     res = self._robot_call(name, args, self.cfg.tool_timeout_s)
                 any_failed = any_failed or _failed(res)
-                msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res)[:4000]})
+                msgs.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(res)[:self.cfg.tool_result_chars]})
             if choice == "required":
                 choice = "auto"                  # forced only for the first round
             if any(n in INFO_SERVER_TOOLS or self.robot_kinds.get(n) == "info" for n in names):
@@ -335,9 +387,11 @@ class BrainSession:
                 break                            # already spoke and only action tools ran: done
             elif not any_failed and all(n in CANNED_ACK for n in names):
                 on_clause(CANNED_ACK[names[0]])  # nothing said yet: confirm instantly, skip another LLM round
+                final = CANNED_ACK[names[0]]
                 break
         reply = " ".join(spoken_all).strip()
-        self.history += [{"role": "user", "content": heard}, {"role": "assistant", "content": reply or "(done)"}]
-        self.history = self.history[-2 * self.cfg.history_turns:]
+        turn = msgs[base:]
+        turn.append({"role": "assistant", "content": final or reply or "(done)"})
+        self._remember(turn)
         log.info("turn: heard=%r first_audio=%.1fs total=%.1fs", heard,
                  first_audio[0] or -1, time.time() - t0)
