@@ -442,3 +442,21 @@ def test_tools_declared_for_both_backends():
     assert set(specs["set_timer"]["parameters"]["properties"]) == {"duration", "label"}
     assert set(specs["set_alarm"]["parameters"]["properties"]) == {"time", "label"}
     assert set(specs["cancel_timer"]["parameters"]["properties"]) == {"which"}
+
+
+def test_alarm_uses_configured_time_zone():
+    """The robot ships set to London time; alarms must follow the owner's zone once the page sets it."""
+    import datetime
+    from zoneinfo import ZoneInfo
+    from reachy_gemini_dj import timers as T
+    assert T.set_timezone("Not/AZone") is False
+    assert T.set_timezone("America/Chicago")
+    try:
+        now = datetime.datetime(2026, 11, 6, 21, 0, tzinfo=ZoneInfo("America/Chicago")).timestamp()
+        fire_at, h, m = T.parse_clock("7:30 am", now)
+        if fire_at is not None:
+            local = datetime.datetime.fromtimestamp(fire_at, ZoneInfo("America/Chicago"))
+            assert (local.day, local.hour, local.minute) == (7, 7, 30)
+        assert T._dt(now).hour == 21
+    finally:
+        T.set_timezone("")

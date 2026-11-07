@@ -41,6 +41,7 @@ class Config:
     frc_alerts: bool = True
     # How the mic is used: "always" = always listening; "push_to_talk" = only while talk is held (loud events)
     listen_mode: str = "always"
+    timezone: str = ""            # IANA zone for alarms, e.g. "America/Chicago"; filled from the controller page
 
     @property
     def effective_model(self) -> str:

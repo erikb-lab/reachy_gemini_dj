@@ -23,7 +23,7 @@ from .audio import AudioPipeline, LISTEN_MODES, set_hw_speaker_level
 from .backends import VoiceBackend
 from .config import Config
 from .frc import FRC
-from .timers import Timers
+from .timers import Timers, set_timezone, _dt as local_dt
 from .tool_schemas import robot_tool_specs
 from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
@@ -62,6 +62,7 @@ class ConfigUpdate(BaseModel):
     tba_api_key: str | None = None
     frc_alerts: bool | None = None
     listen_mode: str | None = None          # "always" | "push_to_talk"
+    timezone: str | None = None             # IANA name, sent by the controller page
 
 
 FRC_KEYS = {"nexus_api_key", "tba_api_key"}
@@ -186,6 +187,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         )
         self.gemini_session.timers = self.timers
         self.talk_pressed_hooks.append(self.timers.dismiss)
+        set_timezone(self.config.timezone)
 
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
@@ -222,7 +224,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
         self.said_text = (self.said_text + " " + text).strip()[-300:]
 
     def record_event(self, kind: str, text: str) -> None:
-        t = datetime.datetime.now().strftime("%H:%M:%S")
+        t = local_dt(time.time()).strftime("%H:%M:%S")
         self.events.appendleft({"t": t, "kind": kind, "text": text})
 
     def _setup_routes(self) -> None:
@@ -283,6 +285,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                     "motion_enabled": self.config.motion_enabled,
                     "expressive": self.config.expressive,
                     "dance_enabled": self.config.dance_enabled,
+                    "timezone": self.config.timezone,
                     "backend": self.config.backend,
                     "brain_url": self.config.brain_url,
                     "allow_gemini_assist": self.config.allow_gemini_assist,
@@ -309,6 +312,8 @@ class ReachyGeminiDJ(ReachyMiniApp):
                 return {"ok": False, "error": "Brain URL must start with ws:// or wss://"}
             if d.get("listen_mode") is not None and d["listen_mode"] not in LISTEN_MODES:
                 return {"ok": False, "error": "listen_mode must be one of: " + ", ".join(LISTEN_MODES)}
+            if d.get("timezone") is not None and not set_timezone(str(d["timezone"]).strip()):
+                return {"ok": False, "error": "Unknown time zone"}
             if d.get("music_volume") is not None:
                 d["music_volume"] = clamp_volume(d["music_volume"])
             if d.get("duck_level") is not None:

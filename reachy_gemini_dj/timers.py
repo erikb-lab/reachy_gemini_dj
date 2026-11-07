@@ -23,6 +23,28 @@ from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
+# Time zone for clock times ("wake me at 7:30", "at 3:45 PM"). The robot ships set to Europe/London, so the app sets
+# this from the controller page's browser time zone (config.timezone). None = the robot's own system time zone.
+_TZ = None
+
+
+def set_timezone(name: str) -> bool:
+    """Use this IANA time zone (e.g. "America/Chicago") for clock times; "" = system zone. False if unknown."""
+    global _TZ
+    if not name:
+        _TZ = None
+        return True
+    try:
+        from zoneinfo import ZoneInfo
+        _TZ = ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def _dt(ts: float) -> datetime.datetime:
+    return datetime.datetime.fromtimestamp(ts, _TZ)
+
 DEFAULT_PATH = Path.home() / ".reachy_gemini_dj" / "timers.json"
 MAX_DURATION_S = 24 * 3600
 MAX_ACTIVE = 20
@@ -295,7 +317,7 @@ def parse_clock(text: Any, now: float) -> tuple[float, int, int]:
             cands = [0 if h == 12 else (h + 12 if h >= 6 else h)]
         else:
             cands = [h % 12, h % 12 + 12]          # "7:30": whichever comes next
-    start = datetime.datetime.fromtimestamp(now)
+    start = _dt(now)
     best = None
     for ch in cands:
         base = start.replace(hour=ch, minute=m, second=0, microsecond=0)
@@ -359,8 +381,8 @@ def _clean_label(label: Any) -> tuple[str, bool]:
 
 
 def _day_word(fire_at: float, now: float) -> str:
-    d1 = datetime.datetime.fromtimestamp(fire_at).date()
-    d0 = datetime.datetime.fromtimestamp(now).date()
+    d1 = _dt(fire_at).date()
+    d0 = _dt(now).date()
     delta = (d1 - d0).days
     return " tomorrow" if delta == 1 else "" if delta == 0 else " on " + d1.strftime("%A")
 
@@ -451,7 +473,7 @@ class Timers:
 
     # ---------------- descriptions ----------------
     def _clock_text(self, e: dict, now: float | None = None) -> str:
-        dt = datetime.datetime.fromtimestamp(e["fire_at"])
+        dt = _dt(e["fire_at"])
         txt = _fmt_clock(dt.hour, dt.minute)
         return txt + (_day_word(e["fire_at"], now if now is not None else self.clock()))
 
@@ -557,7 +579,7 @@ class Timers:
             pass
         try:
             _, h, m = parse_clock(which, self.clock())
-            hits = [e for e in items if datetime.datetime.fromtimestamp(e["fire_at"]).timetuple()[3:5] == (h, m)]
+            hits = [e for e in items if _dt(e["fire_at"]).timetuple()[3:5] == (h, m)]
         except ValueError:
             hits = []
         if not hits and re.search(r"\balarms?\b", which.lower()) and not low:
@@ -609,7 +631,7 @@ class Timers:
         if e["reminder"]:
             return f"the reminder to {e['label']}"
         if e["kind"] == "alarm":
-            dt = datetime.datetime.fromtimestamp(e["fire_at"])
+            dt = _dt(e["fire_at"])
             return f"the {_fmt_clock(dt.hour, dt.minute)} alarm" if not e["label"] else f"the {e['label']} alarm"
         if e["label"]:
             return f"the {e['label']} timer"
@@ -685,7 +707,7 @@ class Timers:
         if e["reminder"]:
             return f"Reminder: {e['label']}."
         if e["kind"] == "alarm":
-            dt = datetime.datetime.fromtimestamp(e["fire_at"])
+            dt = _dt(e["fire_at"])
             base = f"It's {_fmt_clock(dt.hour, dt.minute)}. This is your alarm."
             return f"It's {_fmt_clock(dt.hour, dt.minute)}. This is your {e['label']} alarm." if e["label"] else base
         if e["label"]:
