@@ -1,2 +1,165 @@
 /* Settings-tab layout (#p-settings): field rows, sliders, accordions, Memory / Music EQ / Experimental cards.
-   Follows the shared style guide; base components (.card .btn .pn-card .pn-btn) live in controller.css / settings.css. */
+   Follows the shared style guide; base components (.card .btn .pn-card .pn-btn) live in controller.css / settings.css.
+   Everything here is scoped to #p-settings and only restates SPEC values, so it never fights the base styles.
+   Loaded before layout.css, so selectors carry an id (and :not(.hide)) to beat layout.css's old two-column rules. */
+
+/* ---------- page: ONE column, every section is a card ---------- */
+#p-settings:not(.hide){display:flex;flex-direction:column;gap:16px;max-width:760px;margin:0 auto;width:100%;align-items:stretch}
+#p-settings #settings-panel{display:contents}          /* its four cards become siblings of the rest, so they can be ordered */
+#p-settings > *, #p-settings .pn-card{margin:0 !important}
+#p-settings > *{order:10}                              /* Diagnostics (no id) stays last */
+#sc-sound{order:1}#eq-card{order:2}#sc-backend{order:3}#memory-card{order:4}#sc-frc{order:5}#sc-gemini{order:6}
+#acc-quick{order:7}#acc-google{order:8}#acc-experimental{order:9}
+
+/* ---------- one surface for cards and accordions ---------- */
+#p-settings > .card, #p-settings .pn-card, #p-settings > details.acc{
+  background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow, none);color:var(--ink)}
+#p-settings > .card, #p-settings .pn-card{padding:18px}
+#p-settings .card > h2, #p-settings .pn-card > h2, #p-settings > details.acc > summary{
+  margin:0 0 12px;font-size:13px;font-weight:700;line-height:1.3;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+#p-settings .card > h2 .badge{margin-left:8px;font-size:12px;padding:1px 9px}
+#p-settings h3{margin:18px 0 8px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+#p-settings .sub, #p-settings .hint, #p-settings .pn-muted{font-size:13.5px;line-height:1.45;color:var(--mut);margin:0 0 12px;max-width:70ch}
+
+/* accordions: same family, clearly collapsible (chevron, title row is the whole tap target) */
+#p-settings > details.acc{padding:0;overflow:hidden}
+#p-settings > details.acc > summary{display:flex;align-items:center;gap:8px;margin:0;min-height:52px;padding:0 18px;
+  cursor:pointer;list-style:none;user-select:none}
+#p-settings > details.acc > summary::-webkit-details-marker{display:none}
+#p-settings > details.acc > summary::after{content:"";margin-left:auto;flex:none;width:8px;height:8px;
+  border:solid var(--mut);border-width:0 2px 2px 0;transform:translateY(-2px) rotate(45deg);transition:transform .15s}
+#p-settings > details.acc[open] > summary::after{transform:translateY(2px) rotate(-135deg)}
+#p-settings > details.acc > summary .badge{margin-left:0}
+#p-settings > details.acc[open] > summary{border-bottom:1px solid var(--line)}
+#p-settings > details.acc > div{padding:16px 18px 18px}
+#p-settings > details.acc > summary:hover{color:var(--ink)}
+
+/* ---------- fields ---------- */
+#p-settings .sp-field{margin:0 0 16px}
+#p-settings .sp-field:last-child, #p-settings .pn-card > :last-child{margin-bottom:0}
+#p-settings .sp-field > label, #p-settings label.l{display:block;margin:0 0 6px;font-size:14px;font-weight:600;line-height:1.35;color:var(--ink)}
+#p-settings label.l{margin-top:16px}
+#p-settings details.acc > div > :first-child{margin-top:0}
+#p-settings .sp-field > label .hint{display:block;margin:2px 0 0;font-size:13px;font-weight:400;color:var(--mut);max-width:none}
+#p-settings .sp-field > .hint{display:block;margin:6px 0 0;font-size:13px}
+#p-settings .kstate{margin-left:8px;font-size:13px;font-weight:600}
+#p-settings #keystate, #p-settings #curmodel{margin-left:6px;font-size:13px;font-weight:600}
+#p-settings input[type=text], #p-settings input[type=password], #p-settings input[type=url], #p-settings .sp-input,
+#p-settings select, #p-settings textarea{
+  width:100%;min-height:40px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);
+  color:var(--ink);font:inherit;font-size:15px}
+#p-settings textarea{min-height:88px;resize:vertical}
+#p-settings input:focus-visible, #p-settings select:focus-visible, #p-settings textarea:focus-visible{
+  outline:2px solid var(--accent);outline-offset:0;border-color:var(--accent)}
+#p-settings ::placeholder{color:var(--mut);opacity:.8}
+
+/* input + button on one row, same height */
+#p-settings .sp-row, #p-settings .row{display:flex;flex-direction:row;flex-wrap:wrap;align-items:stretch;gap:8px}
+#p-settings .sp-row{flex-wrap:nowrap}
+#p-settings .sp-row .sp-input, #p-settings .row > .grow{flex:1 1 160px;min-width:0;width:auto}
+#p-settings .sp-row > button, #p-settings .row > button{flex:none}
+#p-settings .sp-scan .sp-row{margin-bottom:0}
+#p-settings .sp-scan > span{display:block;margin-top:6px}
+
+/* ---------- buttons: primary / secondary (tonal) / danger, 40px (44 on phone) ---------- */
+#p-settings .btn, #p-settings .pn-btn{
+  min-height:40px;min-width:0;padding:0 16px;border-radius:10px;font-size:14px;font-weight:600;line-height:1.2;
+  text-transform:none;letter-spacing:0;filter:none}
+#p-settings .btn{background:var(--accent);color:var(--accent-ink);border:0}
+#p-settings .btn.ghost, #p-settings .pn-btn{background:var(--soft);color:var(--accent);border:0}
+#p-settings .pn-btn.primary{background:var(--accent);color:var(--accent-ink)}
+#p-settings .btn.danger{background:var(--bad);color:#fff}
+#p-settings .btn:disabled, #p-settings .pn-btn:disabled{opacity:.45}
+#p-settings .btn.sm{min-height:36px;padding:0 12px}
+
+/* ---------- sliders: name left, value right on the same line, slider below ---------- */
+#p-settings input[type=range]{display:block;width:100%;height:28px;min-height:0;margin:0;accent-color:var(--accent)}
+#p-settings .sp-field:has(> .sp-range){position:relative}
+#p-settings .sp-field:has(> .sp-range) > label{padding-right:76px}
+#p-settings .sp-range{display:block;min-height:0;gap:0}
+#p-settings .sp-range output, #p-settings .row:has(> input[type=range]) output{
+  position:absolute;top:0;right:0;font-size:14px;font-weight:600;line-height:19px;color:var(--ink);font-variant-numeric:tabular-nums}
+/* built-in quick settings: label sits above a .row; pin the value to the label's last line */
+#p-settings .row:has(> input[type=range]){position:relative;display:block;margin-top:0}
+#p-settings .row:has(> input[type=range]) output{top:auto;bottom:100%;margin-bottom:6px}
+#p-settings label.l:has(+ .row > input[type=range]){padding-right:76px;margin-bottom:2px}
+
+/* ---------- switch rows (static .sw and built .pn-sw), 44px min, control on the right ---------- */
+#p-settings .sw, #p-settings .pn-sw{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px;
+  margin:0;padding:10px 0;border:0;border-top:1px solid var(--line);cursor:pointer}
+#p-settings .sw label{flex:1;min-width:0;cursor:pointer;font-size:15px;line-height:1.35}
+#p-settings .sw label b, #p-settings .pn-sw .txt b{display:block;font-size:15px;font-weight:600;color:var(--ink)}
+#p-settings .sw .sub, #p-settings .pn-sw .txt span{display:block;margin:2px 0 0;font-size:13px;font-weight:400;color:var(--mut)}
+#p-settings .sw input, #p-settings .pn-sw input{flex:none;width:22px;height:22px;margin:0;accent-color:var(--accent)}
+#p-settings .sp-field:has(+ .pn-sw), #p-settings .sp-field:has(+ .sw){margin-bottom:8px}
+#p-settings .pn-sw:first-child, #p-settings details.acc > div > .sw:first-child{border-top:0;padding-top:0}
+
+/* read-only status lines */
+#p-settings .sp-ro{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:8px 0 0;padding-top:12px;border-top:1px solid var(--line);font-size:13.5px}
+#p-settings .sp-ro dt{color:var(--mut)}#p-settings .sp-ro dd{margin:0;color:var(--ink)}
+
+/* ---------- Music EQ ---------- */
+#eq-card .eq-presets{display:flex;flex-wrap:wrap;gap:8px}
+#p-settings .eq-pill{min-height:36px;padding:0 14px;border-radius:999px}
+#p-settings .eq-reset{background:transparent;color:var(--ink);border:1px solid var(--line)}
+
+/* ---------- Memory ---------- */
+#memory-card .sub{margin-bottom:8px}
+#memory-card .list{max-height:none;overflow:visible;margin:0 0 4px}
+#memory-card .list li{align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:15px}
+#memory-card .list li:last-child{border-bottom:0}
+#memory-card .list li.sub{padding:8px 0;font-size:13.5px}
+#memory-card .list li > .grow{flex:1;min-width:0}
+#memory-card .list li > button{flex:none}
+#memory-card #f-mem{flex-wrap:nowrap;margin-top:12px !important;padding-top:12px;border-top:1px solid var(--line)}
+#memory-card #f-mem > .grow{flex:1 1 0}
+#memory-card #f-mem > button{flex:none}
+
+/* ---------- Google account ---------- */
+#p-settings .steps{margin:0;padding-left:20px}
+#p-settings .steps li{padding:8px 0;font-size:14px}
+#p-settings .steps li input{margin-top:8px}
+#p-settings .chips{gap:8px}
+#p-settings .chip{min-height:36px;padding:0 14px;border-radius:999px;font-size:13.5px}
+#p-settings .note{margin:0 0 12px;border-radius:10px;padding:10px 12px;font-size:13.5px}
+#p-settings #g-badge{font-size:12px;text-transform:none;letter-spacing:0}
+#p-settings #g-err{margin-top:12px}
+
+/* ---------- Diagnostics ---------- */
+#p-settings #diag{font-size:13px;line-height:1.6;overflow-x:auto;overflow-wrap:anywhere}
+
+/* ---------- Experimental ---------- */
+#acc-experimental .xp-warn{margin:0 0 12px;padding:10px 12px;border-radius:10px;background:var(--warnbg);color:var(--warn);
+  font-size:13.5px;line-height:1.45;max-width:none}
+#acc-experimental h3{margin-top:18px}
+#acc-experimental .gp-map{display:block;margin:0}
+#acc-experimental .gp-mrow{display:grid;grid-template-columns:minmax(120px,.8fr) minmax(0,1.6fr);gap:8px 12px;align-items:center;
+  padding:10px 0;border-top:1px solid var(--line)}
+#acc-experimental .gp-mrow:first-child{border-top:0}
+#acc-experimental .gp-mname{font-size:14px;font-weight:600;color:var(--ink)}
+#acc-experimental .gp-slots{display:flex;flex-wrap:wrap;gap:8px}
+#acc-experimental .gp-chip{min-height:36px;padding:4px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);
+  color:var(--ink);font-size:13.5px;font-weight:600}
+#acc-experimental .gp-chip small{font-size:11.5px;font-weight:400;color:var(--mut)}
+#acc-experimental .gp-chip.wait{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}
+#acc-experimental .gp-cap{border-radius:10px;border:1px solid var(--accent);background:var(--bg);padding:10px 12px;font-size:14px}
+#acc-experimental .gp-cap .pn-btn, #acc-experimental .gp-mapbox .pn-btn{min-height:36px}
+#acc-experimental .gp-mapbox .gp-row{margin-top:12px !important}
+#acc-experimental .gp-mapbox .pn-muted{margin:12px 0 0}
+
+/* ---------- phone ---------- */
+@media (max-width:759.98px){
+  #p-settings:not(.hide){gap:12px}
+  #p-settings > .card, #p-settings .pn-card{padding:14px}
+  #p-settings > details.acc > summary{padding:0 14px}
+  #p-settings > details.acc > div{padding:14px}
+  #p-settings .btn, #p-settings .pn-btn{min-height:44px}
+  #p-settings .btn.sm, #p-settings .eq-pill, #acc-experimental .gp-cap .pn-btn, #acc-experimental .gp-mapbox .pn-btn{min-height:36px}
+  #p-settings input[type=text], #p-settings input[type=password], #p-settings input[type=url], #p-settings .sp-input,
+  #p-settings select{min-height:44px}
+  #p-settings .sp-row{flex-direction:row}                /* settings.css stacks it under 480px; keep input + button on one row */
+  #acc-experimental .gp-mrow{grid-template-columns:1fr;gap:6px}
+}
+#p-settings .sp-ro + .hint{margin:12px 0 0}
+#eq-card > .sub{margin-bottom:16px}
+#p-settings .sw label br{display:none}

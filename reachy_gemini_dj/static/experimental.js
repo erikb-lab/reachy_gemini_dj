@@ -34,7 +34,7 @@
     var acc = h('details', { class: 'acc', id: 'acc-experimental' });
     acc.appendChild(h('summary', { text: 'Experimental' }));
     var body = h('div');
-    body.appendChild(h('p', { class: 'sub', text: 'Experimental features move the motors directly. Keep hands clear of ' +
+    body.appendChild(h('p', { class: 'xp-warn', role: 'note', text: 'Experimental features move the motors directly. Keep hands clear of ' +
       'the head and antennas. If a motor overloads, use Motor health on the Robot tab to clear it.' }));
 
     els.on = h('input', { type: 'checkbox', id: 'x_gamepad_enabled' });
@@ -43,7 +43,7 @@
       save({ gamepad_enabled: els.on.checked }, els.on.checked ? 'Gamepad mode enabled' : 'Gamepad mode disabled')
         .then(function () { editing = false; });
     });
-    body.appendChild(h('div', { class: 'sw' }, [
+    body.appendChild(h('div', { class: 'sw first' }, [
       h('label', { for: 'x_gamepad_enabled' }, [h('b', { text: 'Gamepad mode' }), h('br'),
         h('span', { class: 'sub', text: 'Drive the head, body and antennas with a game controller. Adds a Gamepad card to the Robot tab.' })]),
       els.on]));
@@ -54,10 +54,11 @@
     els.speed.addEventListener('change', function () {
       save({ gamepad_speed: +els.speed.value }).then(function () { editing = false; });
     });
-    body.appendChild(h('label', { class: 'l', for: 'x_gamepad_speed', text: 'Gamepad speed' }));
-    body.appendChild(h('div', { class: 'row' }, [els.speed, els.out]));
+    body.appendChild(h('div', { class: 'sp-field' }, [
+      h('label', { for: 'x_gamepad_speed', text: 'Gamepad speed' }),
+      h('div', { class: 'sp-range' }, [els.speed, els.out])]));
 
-    body.appendChild(h('label', { class: 'l', text: 'Controls and button mapping' }));
+    body.appendChild(h('h3', { text: 'Controls and button mapping' }));
     els.map = h('div', { id: 'x-gamepad-map' });
     body.appendChild(els.map);
 

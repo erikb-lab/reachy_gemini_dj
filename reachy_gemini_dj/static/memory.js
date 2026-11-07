@@ -21,7 +21,7 @@
     facts.forEach(function (f) {
       var li = document.createElement('li'), t = document.createElement('span'), b = document.createElement('button');
       t.className = 'grow'; t.textContent = f.text;
-      b.className = 'btn ghost'; b.type = 'button'; b.textContent = 'Delete';
+      b.className = 'btn ghost sm'; b.type = 'button'; b.textContent = 'Remove';
       b.setAttribute('aria-label', 'Forget: ' + f.text);
       b.addEventListener('click', function () {
         b.disabled = true;
