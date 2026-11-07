@@ -3,7 +3,7 @@
    API reads it, and this script streams a target pose to POST /api/drive/target. The robot walks the motors towards
    the target at a capped speed (motion.py), so a lost packet or a "centre" press never makes it jump.
 
-   Every control can be remapped: tap a control in the table, then press a button or move a stick or trigger.
+   Every control can be remapped (Settings > Experimental): tap a control in the table, then press a button or move a stick or trigger.
    Analog inputs stay analog (sticks and L2/R2 triggers give proportional speed). The mapping is remembered per
    controller in this browser. Vanilla JS, no dependencies. */
 (function () {
@@ -65,6 +65,7 @@
 
   var on = false, busy = false, fine = false, target = null, lastSent = '', lastSendT = 0, lastFrame = 0;
   var prevButtons = [], padIndex = null, timer = 0, map = null, mapFor = '';
+  var enabled = false, speed = 1;       // from state.config (Settings > Experimental)
   var capture = null;                    // {kind:'analog'|'button', id, slot, base:{axes, buttons}, until}
   var els = {};
 
@@ -167,28 +168,10 @@
     els.read = h('dl', { class: 'gp-read', 'aria-live': 'off' });
     card.appendChild(els.read);
 
-    els.mapBox = h('details', { class: 'gp-help' });
-    els.mapBox.appendChild(h('summary', { text: 'Controls and button mapping' }));
-    els.capBar = h('div', { class: 'gp-cap hide', role: 'status', 'aria-live': 'polite' });
-    els.mapBox.appendChild(els.capBar);
-    els.table = h('div', { class: 'gp-map' });
-    els.mapBox.appendChild(els.table);
-    els.mapBox.appendChild(h('div', { class: 'gp-row', style: 'margin-top:10px' }, [
-      h('button', { type: 'button', class: 'pn-btn', text: 'Reset to defaults', onclick: function () {
-        if (!window.confirm('Reset all controller mappings to the defaults?')) return;
-        map = copy(DEFAULTS); saveMap(); renderMap(); toast('Mapping reset');
-      } })
-    ]));
-    els.mapNote = h('p', { class: 'pn-muted' });
-    els.mapBox.appendChild(els.mapNote);
-    els.mapBox.appendChild(h('p', { class: 'pn-muted', text: 'Tap a control, then press a button or move a stick or trigger ' +
-      'in the direction you want. Sticks and L2/R2 are analog: push further to move faster. Directions are from ' +
-      'Reachy\'s point of view. The mapping is remembered in this browser for this controller.' }));
-    els.mapBox.appendChild(h('p', { class: 'pn-muted', text: 'Pair the controller with this phone or computer in its ' +
-      'own Bluetooth settings (DualShock 4: hold Share + PS until the light flashes), then press any button so the ' +
-      'browser sees it. Voice moves, dances and emotions pause while gamepad mode is on; it turns itself off after ' +
-      '3 minutes without input and Reachy keeps the pose.' }));
-    card.appendChild(els.mapBox);
+    card.appendChild(h('p', { class: 'pn-muted gp-hint' }, ['Mapping and speed: ',
+      h('button', { type: 'button', class: 'gp-link', text: 'Settings > Experimental', onclick: openExperimental })]));
+    els.card = card;
+    card.classList.toggle('hide', !enabled);
 
     var poses = document.getElementById('rp-poses');
     if (poses && poses.parentNode === root) root.insertBefore(card, poses); else root.appendChild(card);
@@ -202,7 +185,7 @@
       '.gp-read{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px;margin:14px 0 4px}' +
       '.gp-read div{background:var(--p-bg);border:1px solid var(--p-border);border-radius:10px;padding:6px 10px}' +
       '.gp-read dt{color:var(--p-muted);font-size:.78rem}.gp-read dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}' +
-      '.gp-help{margin-top:12px}.gp-help summary{cursor:pointer;font-weight:600;min-height:36px;display:flex;align-items:center}' +
+      '.gp-hint{margin:12px 0 0}.gp-link{background:none;border:0;padding:0;font:inherit;color:var(--p-accent);text-decoration:underline;cursor:pointer}' +
       '.gp-map{display:grid;gap:6px;margin:8px 0}' +
       '.gp-mrow{display:grid;grid-template-columns:minmax(110px,1fr) minmax(0,1.4fr);gap:6px 10px;align-items:center;' +
         'padding:6px 0;border-top:1px solid var(--p-border)}' +
@@ -214,13 +197,48 @@
       '.gp-chip.wait{border-color:var(--p-accent);box-shadow:0 0 0 2px var(--p-accent)}' +
       '.gp-cap{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border-radius:10px;' +
         'background:var(--p-bg);border:1px solid var(--p-accent);margin:8px 0;font-weight:600}' +
-      '.gp-cap .pn-btn{min-height:36px}' +
+      '.gp-cap .pn-btn{min-height:36px}.gp-mapbox .pn-btn{text-transform:none}' +
       '@media (max-width:480px){.gp-mrow{grid-template-columns:1fr}}';
     document.head.appendChild(css);
     paint();
     renderMap();
     return true;
   }
+
+  /* Builds the mapping UI (capture bar, remap table, reset, notes) into el. Called by experimental.js. */
+  function mountMapping(el) {
+    var box = h('div', { class: 'gp-mapbox' });
+    els.capBar = h('div', { class: 'gp-cap hide', role: 'status', 'aria-live': 'polite' });
+    box.appendChild(els.capBar);
+    els.table = h('div', { class: 'gp-map' });
+    box.appendChild(els.table);
+    box.appendChild(h('div', { class: 'gp-row', style: 'margin-top:10px' }, [
+      h('button', { type: 'button', class: 'pn-btn', text: 'Reset to defaults', onclick: function () {
+        if (!window.confirm('Reset all controller mappings to the defaults?')) return;
+        map = copy(DEFAULTS); saveMap(); renderMap(); toast('Mapping reset');
+      } })
+    ]));
+    els.mapNote = h('p', { class: 'pn-muted' });
+    box.appendChild(els.mapNote);
+    box.appendChild(h('p', { class: 'pn-muted', text: 'Tap a control, then press a button or move a stick or trigger ' +
+      'in the direction you want. Sticks and L2/R2 are analog: push further to move faster. Directions are from ' +
+      'Reachy\'s point of view. The mapping is remembered in this browser for this controller.' }));
+    box.appendChild(h('p', { class: 'pn-muted', text: 'Pair the controller with this phone or computer in its ' +
+      'own Bluetooth settings (DualShock 4: hold Share + PS until the light flashes), then press any button so the ' +
+      'browser sees it. Voice moves, dances and emotions pause while gamepad mode is on; it turns itself off after ' +
+      '3 minutes without input and Reachy keeps the pose.' }));
+    el.textContent = '';
+    el.appendChild(box);
+    renderMap();
+    if (pad()) loop();
+  }
+  function openExperimental() {
+    var tab = document.getElementById('tab-settings');
+    if (tab) tab.click();
+    var acc = document.getElementById('acc-experimental');
+    if (acc) { acc.open = true; if (acc.scrollIntoView) acc.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  }
+  window.reachyGamepad = { mountMapping: mountMapping };
 
   function paint() {
     if (!els.btn) return;
@@ -398,7 +416,7 @@
         });
         prevButtons = BUTTONS.map(function (b) { return down[b.id]; });
         if (on && target) {
-          var f = fine ? FINE : 1;
+          var f = (fine ? FINE : 1) * speed;
           ANALOG.forEach(function (a) {
             var v = analog(a.id, p);
             if (!v) return;
@@ -413,7 +431,7 @@
     else lastFrame = 0;
   }
   function fire(id) {
-    if (id === 'toggle') { setMode(!on); return; }
+    if (id === 'toggle') { if (enabled || on) setMode(!on); return; }
     if (!on || !target) return;
     if (id === 'save') savePose();
     else if (id === 'centre') centre();
@@ -448,8 +466,17 @@
   });
 
   function render(s) {
+    var cfg = s && s.config;
+    if (cfg && typeof cfg.gamepad_enabled === 'boolean') {
+      enabled = cfg.gamepad_enabled;
+      if (els.card) els.card.classList.toggle('hide', !enabled);
+      if (!enabled && on) { on = false; paint(); }
+    }
+    if (cfg && typeof cfg.gamepad_speed === 'number' && isFinite(cfg.gamepad_speed)) {
+      speed = Math.min(2, Math.max(0.25, cfg.gamepad_speed));
+    }
     var m = (s && s.motion) || {};
-    if (typeof m.manual === 'boolean' && m.manual !== on && !busy) {
+    if (typeof m.manual === 'boolean' && m.manual !== on && !busy && (enabled || !m.manual)) {
       on = m.manual;
       if (on && !target) {           // turned on elsewhere: fetch where the robot is
         post('/api/drive', { on: true }).then(function (r) { if (r && r.ok) { target = r.target; loop(); paint(); } }).catch(function () {});
