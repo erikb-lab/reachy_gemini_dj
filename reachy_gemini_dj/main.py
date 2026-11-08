@@ -136,6 +136,10 @@ class PoseName(BaseModel):
     name: str
 
 
+class PanoramaCapture(BaseModel):
+    mode: str | None = None       # ultra_fast | fast | regular | slow | ultra_slow (default regular)
+
+
 class LearnToggle(BaseModel):
     on: bool
 
@@ -670,8 +674,13 @@ class ReachyGeminiDJ(ReachyMiniApp):
         # 360° photos. capture starts the robot turning (~34 photos, then a stitch on the robot); the page polls status.
         # Photos are kept on the robot in ~/.reachy_gemini_dj/panoramas (newest 30), as 2:1 JPEGs with GPano metadata.
         @app.post("/api/panorama/capture")
-        def panorama_capture():
-            return self.panorama.start("page")
+        def panorama_capture(req: PanoramaCapture = None):
+            return self.panorama.start("page", req.mode if req else None)
+
+        @app.get("/api/panorama/modes")
+        def panorama_modes():
+            from .panorama import DEFAULT_MODE, modes_listing
+            return {"default": DEFAULT_MODE, "modes": modes_listing()}
 
         @app.get("/api/panorama/status")
         def panorama_status():

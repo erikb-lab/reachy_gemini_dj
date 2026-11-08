@@ -163,10 +163,15 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
         ),
         types.FunctionDeclaration(
             name="take_360_photo",
-            description="Take a 360-degree photo sphere of the room: the robot turns all the way around for about a "
-                        "minute, then the photo appears on the control page (Robot tab). Use when asked for a 360 "
-                        "photo, panorama or photo sphere. Tell people to step out of the shot.",
-            parameters=types.Schema(type="OBJECT", properties={}),
+            description="Take a 360-degree photo sphere of the room: the robot turns all the way around, then the photo "
+                        "appears on the control page (Robot tab). Use when asked for a 360 photo, panorama or photo "
+                        "sphere. Tell people to step out of the shot. Mode sets the number of photos: ultra_fast (15, "
+                        "about 1.5 min), fast (25, 2.5 min), regular (42, 4.5 min, the default), slow (60, 6 min), "
+                        "ultra_slow (80, 8 min).",
+            parameters=types.Schema(type="OBJECT", properties={
+                "mode": types.Schema(type="STRING", enum=["ultra_fast", "fast", "regular", "slow", "ultra_slow"],
+                                     description="How many photos to take. Omit for regular."),
+            }),
         ),
         # FRC (FIRST Robotics Competition) tools: QR scan, FRC Nexus queuing, The Blue Alliance
         types.FunctionDeclaration(
@@ -705,11 +710,14 @@ class GeminiSession:
                 pano = getattr(self, "panorama", None)
                 if pano is None:
                     return {"error": "360 photos are not ready yet"}
-                res = pano.start("voice")
+                res = pano.start("voice", args.get("mode"))
                 if not res.get("ok"):
                     return {"error": res.get("error", "Could not start the 360 photo")}
-                return {"ok": True, "result": "Started: turning around for about a minute; the photo will be on the "
-                                              "control page's Robot tab."}
+                from .panorama import DEFAULT_MODE, MODE_ALIASES, mode_estimate_s, mode_shots
+                mode = MODE_ALIASES.get(args.get("mode") or DEFAULT_MODE, args.get("mode") or DEFAULT_MODE)
+                return {"ok": True, "result": f"Started ({mode.replace('_', ' ')}, {mode_shots(mode)} photos): turning around, "
+                                              f"about {mode_estimate_s(mode) // 60 + 1} minutes in all; the photo will be on "
+                                              "the control page's Robot tab."}
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)

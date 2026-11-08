@@ -55,7 +55,11 @@
     card.appendChild(h('h2', { text: '360° photos' }));
     els.take = h('button', { type: 'button', class: 'pn-btn primary', text: 'Take 360° photo', onclick: start });
     els.cancel = h('button', { type: 'button', class: 'pn-btn quiet', text: 'Cancel', onclick: cancel, hidden: '' });
-    card.appendChild(h('div', { class: 'pano-row' }, [els.take, els.cancel]));
+    els.mode = h('select', { id: 'pano-mode', 'aria-label': 'How many photos' });
+    els.modeNote = h('div', { class: 'pn-muted pano-mode-note' });
+    card.appendChild(h('div', { class: 'pano-row' }, [els.mode, els.take, els.cancel]));
+    card.appendChild(els.modeNote);
+    loadModes();
     els.bar = h('div', { class: 'pano-bar', role: 'progressbar', 'aria-label': 'Progress', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0' }, [h('i')]);
     els.step = h('span', { class: 'pano-step' });
     els.eta = h('span', { class: 'pano-eta pn-muted' });
@@ -63,7 +67,7 @@
     card.appendChild(els.prog);
     els.err = h('div', { class: 'pano-err', role: 'alert', hidden: '' });
     card.appendChild(els.err);
-    card.appendChild(h('p', { class: 'pn-muted', text: 'The robot turns all the way around, taking about 34 sharp full-resolution photos (live video pauses for about 1 minute), then stitches them on the robot. Stand clear of it ' +
+    card.appendChild(h('p', { class: 'pn-muted', text: 'The robot turns all the way around, taking sharp full-resolution photos (live video pauses while it does), then stitches them on the robot. More photos give a cleaner result and take longer. Stand clear of it ' +
       'and step out of the shot, or you will show up in the photo.' }));
     els.count = h('span', { class: 'pano-count' });
     card.appendChild(h('h3', {}, ['Gallery ', els.count]));
@@ -155,9 +159,25 @@
     });
   }
 
+  var MODES = [];
+  function fmtMin(sec) { var m = Math.round(sec / 30) / 2; return m < 1 ? 'under a minute' : '~' + m + ' min'; }
+  function showModeNote() {
+    var m = MODES.filter(function (x) { return x.id === els.mode.value; })[0];
+    els.modeNote.textContent = m ? m.shots + ' photos, ' + fmtMin(m.seconds) + ' in all. ' + m.note + '.' : '';
+  }
+  function loadModes() {
+    api('modes').then(function (r) {
+      MODES = r.modes || [];
+      var saved = ''; try { saved = localStorage.getItem('pano-mode') || ''; } catch (e) {}
+      MODES.forEach(function (m) { els.mode.appendChild(h('option', { value: m.id, text: m.label + ' (' + m.shots + ' photos, ' + fmtMin(m.seconds) + ')' })); });
+      els.mode.value = MODES.some(function (m) { return m.id === saved; }) ? saved : (r.default || 'regular');
+      showModeNote();
+    }).catch(function () { els.mode.hidden = true; });
+    els.mode.addEventListener('change', function () { try { localStorage.setItem('pano-mode', els.mode.value); } catch (e) {} showModeNote(); });
+  }
   function start() {
     els.take.disabled = true; els.err.hidden = true;
-    api('capture', { method: 'POST' }).then(function (r) {
+    api('capture', { method: 'POST', body: JSON.stringify({ mode: els.mode.value || null }) }).then(function (r) {
       if (!r.ok) { els.take.disabled = false; els.err.hidden = false; els.err.textContent = r.error || 'Could not start the capture.'; return; }
       wasActive = true; paintStatus({ state: 'capturing', progress: 0, step: 'Starting…' });
       check();
