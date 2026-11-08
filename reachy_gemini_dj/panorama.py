@@ -262,7 +262,18 @@ MODES: dict[str, dict] = {
                    "rows": [(12, _UP, .5, -24), (14, -30, .25), (14, -14, .75), (14, 2, .25), (14, 18, .75), (12, _DOWN, .25, 30)]},
 }
 DEFAULT_MODE = "regular"
-MODE_ALIASES = {"full": "regular", "quick": "fast"}
+MODE_ALIASES = {"full": "regular", "quick": "fast", "normal": "regular", "default": "regular", "standard": "regular",
+                "fastest": "ultra_fast", "ultrafast": "ultra_fast", "slowest": "ultra_slow", "ultraslow": "ultra_slow",
+                "best": "ultra_slow", "preview": "ultra_fast"}
+
+
+def normalise_mode(mode) -> str | None:
+    """'Ultra slow', 'ultra-slow', ' FAST ', 'quick' ... -> a key of MODES, or None when it is not a mode."""
+    if mode is None or str(mode).strip() == "":
+        return DEFAULT_MODE
+    key = str(mode).strip().lower().replace(" ", "_").replace("-", "_")
+    key = MODE_ALIASES.get(key, key)
+    return key if key in MODES else None
 
 
 def mode_shots(mode: str) -> int:
@@ -272,7 +283,8 @@ def mode_shots(mode: str) -> int:
 def mode_estimate_s(mode: str) -> int:
     """Rough total seconds on the robot (capture ~2.6 s and stitch ~3.6 s per photo, plus start and finish)."""
     n = mode_shots(mode)
-    return int(round(2.6 * n + 3.6 * n + 30, -1))
+    stitch_per = 3.6 if n <= 60 else 2.3          # 80 photos: the robot stitches at 4096 wide to stay within memory
+    return int(round(2.6 * n + stitch_per * n + 30, -1))
 
 
 def modes_listing() -> list[dict]:
@@ -289,9 +301,9 @@ def plan(level: str = DEFAULT_MODE) -> list[Shot]:
     (roll_limit), since every shot there reaches a bit further on one side. All modes see ~93 % of the sphere by area
     (everything from ~64 degrees above to ~70 below the horizon, a polar hole fill_poles completes). `level` is a key of
     MODES ("full" and "quick" still work as "regular" and "fast")."""
-    level = MODE_ALIASES.get(level, level)
-    if level not in MODES:
-        raise ValueError(f"unknown 360 photo mode: {level!r}")
+    given, level = level, normalise_mode(level)
+    if level is None:
+        raise ValueError(f"unknown 360 photo mode: {given!r}")
     rows = [_ring(*r) for r in MODES[level]["rows"]]
     out: list[Shot] = []
     for k, row in enumerate(rows):
@@ -1133,9 +1145,10 @@ class PanoramaJob:
         return self.status()["state"] in ("capturing", "stitching")
 
     def start(self, source: str = "page", mode: str | None = None) -> dict:
-        mode = MODE_ALIASES.get(mode or DEFAULT_MODE, mode or DEFAULT_MODE)
-        if mode not in MODES:
-            return {"ok": False, "error": f"Unknown mode {mode!r}. Use one of: {', '.join(MODES)}."}
+        given = mode
+        mode = normalise_mode(mode)
+        if mode is None:
+            return {"ok": False, "error": f"Unknown mode {given!r}. Use one of: {', '.join(MODES)}."}
         with self._lock:
             if self._st["state"] in ("capturing", "stitching"):
                 return {"ok": False, "error": "A 360° photo is already being taken."}
