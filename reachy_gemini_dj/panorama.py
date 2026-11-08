@@ -1140,6 +1140,8 @@ class PanoramaJob:
         return p if p.exists() else None
 
     def delete(self, pid: str) -> bool:
+        """Remove a 360 photo completely: the picture, its thumbnail and details, and (when it is the capture the
+        raw photos in last_raw came from, or no photo is left) those raw photos too."""
         if not ID_RE.match(pid or ""):
             return False
         found = False
@@ -1148,6 +1150,14 @@ class PanoramaJob:
             if p.exists():
                 p.unlink()
                 found = True
+        raw = self.store / "last_raw"
+        if raw.exists():
+            try:
+                owner = (raw / "id.txt").read_text().strip()
+            except OSError:
+                owner = ""
+            if owner == pid or not any(self.store.glob("*.json")):
+                shutil.rmtree(raw, ignore_errors=True)
         return found
 
     # ------------------------------------------------------------------ worker
@@ -1177,7 +1187,7 @@ class PanoramaJob:
             t1 = time.monotonic()
             self._set(step="Matching photos")
             matches = self._capture_matches(len(frames))
-            self._save_raw(frames)
+            self._save_raw(frames, pid)
             pano, info = stitch(frames, progress=lambda f, s: self._set(progress=round(f, 3), step=s), matches=matches)
             info["matched_during_capture"] = matches is not None
             self._set(step="Saving", progress=0.97)
@@ -1210,8 +1220,9 @@ class PanoramaJob:
                 except Exception:
                     pass
 
-    def _save_raw(self, frames: list[Frame]) -> None:
-        """Keep the last capture's photos and poses (store/last_raw, replaced each time) so it can be re-stitched."""
+    def _save_raw(self, frames: list[Frame], pid: str = "") -> None:
+        """Keep the last capture's photos and poses (store/last_raw, replaced each time) so it can be re-stitched.
+        Deleting that 360 photo removes them too (see delete)."""
         import cv2
         raw = self.store / "last_raw"
         try:
@@ -1224,6 +1235,7 @@ class PanoramaJob:
                     cv2.imwrite(str(raw / f"{k:02d}.jpg"), f.image, [cv2.IMWRITE_JPEG_QUALITY, 92])
             (raw / "frames.json").write_text(json.dumps([{"i": k, "pose": np.asarray(f.pose).tolist()}
                                                          for k, f in enumerate(frames)]))
+            (raw / "id.txt").write_text(pid)
         except Exception as e:                       # never let this break the photo
             log.warning("could not keep the raw photos: %s", e)
 
