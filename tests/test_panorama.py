@@ -30,7 +30,7 @@ def test_camera_rotation_is_orthonormal_even_if_the_pose_is_not():
 
 
 # ------------------------------------------------------------------------------------------------- the plan ---
-@pytest.mark.parametrize("level,n", [("full", 34), ("quick", 28)])
+@pytest.mark.parametrize("level,n", [("full", 42), ("quick", 28)])
 def test_plan_reachable_and_serpentine(level, n):
     shots = P.plan(level)
     assert len(shots) == n

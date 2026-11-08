@@ -248,13 +248,13 @@ def plan(level: str = "full") -> list[Shot]:
     Pitch is limited to +-40 and the camera rolls about its own axis, so looking up/down the only way to see further
     towards a pole is to roll the head: the top and bottom rows use the biggest roll the inverse kinematics solves
     (roll_limit) and are dense, since every shot there reaches a bit further on one side.
-    full: 34 shots, 96 % of the sphere by area (everything from 69 degrees above to 76 below the horizon on every
+    full: 42 shots, 96 % of the sphere by area (everything from 69 degrees above to 76 below the horizon on every
     meridian, a polar hole of ~18 / ~12 degrees radius that fill_poles completes); quick: 28 shots, ~95 %."""
     if level == "quick":
         rows = [_ring(8, -PITCH_LIMIT, .5, -31), _ring(6, -12, .25), _ring(6, 14, .75), _ring(8, PITCH_LIMIT, .25, 40)]
     else:
         rows = [_ring(9, -PITCH_LIMIT, .5, -31),               # rolled, towards the zenith
-                _ring(8, -12, .25), _ring(8, 14, .75),
+                _ring(12, -12, .25), _ring(12, 14, .75),
                 _ring(9, PITCH_LIMIT, .25, 40)]                # rolled, towards the nadir
     out: list[Shot] = []
     for k, row in enumerate(rows):
@@ -1365,10 +1365,15 @@ class PanoramaJob:
             try:
                 mini.goto_target(head=head, body_yaw=body_yaw, duration=duration)
                 return
-            except Exception as e:                      # MoveBusyError: another move is finishing
-                if "busy" not in str(e).lower() and "already running" not in str(e).lower():
+            except Exception as e:
+                msg = str(e).lower()
+                if "busy" in msg or "already running" in msg:        # MoveBusyError: another move is finishing
+                    time.sleep(0.1)
+                elif "out of range" in msg and attempt < 3:          # the daemon stalled mid-move (e.g. its relay
+                    log.warning("move failed (%s); trying it again", e)   # reconnecting): a retry is a fresh move
+                    time.sleep(0.4)
+                else:
                     raise
-                time.sleep(0.1)
         raise RuntimeError("The robot was busy with another move.")
 
     @staticmethod
