@@ -5,7 +5,7 @@ colorFrom: indigo
 colorTo: purple
 sdk: static
 pinned: false
-short_description: Voice DJ, 360 photos and helper for Reachy Mini, free local voice
+short_description: Voice DJ, 360 photos and helper for Reachy Mini
 tags:
   - reachy_mini_python_app
 ---
