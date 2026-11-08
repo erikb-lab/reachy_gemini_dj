@@ -30,7 +30,7 @@ def test_camera_rotation_is_orthonormal_even_if_the_pose_is_not():
 
 
 # ------------------------------------------------------------------------------------------------- the plan ---
-@pytest.mark.parametrize("level,n", [("full", 34), ("quick", 28)])
+@pytest.mark.parametrize("level,n", [("full", 42), ("quick", 25), ("ultra_fast", 15), ("fast", 25), ("regular", 42), ("slow", 60), ("ultra_slow", 80)])
 def test_plan_reachable_and_serpentine(level, n):
     shots = P.plan(level)
     assert len(shots) == n
@@ -50,7 +50,7 @@ def test_roll_limit_matches_the_ik_envelope():
     assert P.roll_limit(-40, 90) == P.roll_limit(-40, 20)            # beyond HEAD_TURN_LIMIT: the worst case
 
 
-@pytest.mark.parametrize("level,sphere", [("full", 0.95), ("quick", 0.94)])
+@pytest.mark.parametrize("level,sphere", [("ultra_fast", 0.94), ("fast", 0.95), ("regular", 0.95), ("slow", 0.95), ("ultra_slow", 0.95)])
 def test_plans_see_most_of_the_sphere(level, sphere):
     # the full-field-of-view camera (3072x1728), which is what the robot captures with
     cov = P.coverage(P.plan(level), P.Camera(size=(3072, 1728)), 360)
@@ -210,3 +210,28 @@ def test_delete_removes_the_raw_photos_of_that_capture(tmp_path):
     assert j.delete("20261108-000049") and (tmp_path / "last_raw").exists()      # an older photo: keep the latest raw
     assert j.delete("20261108-000150") and not (tmp_path / "last_raw").exists()  # its own raw photos go with it
     assert list(tmp_path.iterdir()) == []                                        # nothing left behind
+
+
+def test_modes_listing_start_and_unknown_mode(tmp_path):
+    ls = P.modes_listing()
+    assert [m["id"] for m in ls] == ["ultra_fast", "fast", "regular", "slow", "ultra_slow"]
+    assert [m["shots"] for m in ls] == [15, 25, 42, 60, 80]
+    assert [m["seconds"] for m in ls] == sorted(m["seconds"] for m in ls)
+    with pytest.raises(ValueError):
+        P.plan("bogus")
+    r = job(tmp_path).start("page", "bogus")
+    assert not r["ok"] and "Unknown mode" in r["error"]
+
+
+def test_every_mode_is_reachable_and_overlaps_enough():
+    cam = P.Camera(size=(3072, 1728))
+    for mode in P.MODES:
+        shots = P.plan(mode)
+        assert all(abs(s.yaw - s.body) <= P.HEAD_TURN_LIMIT + 1e-9 and abs(s.pitch) <= P.PITCH_LIMIT for s in shots)
+        assert all(abs(s.roll) <= P.roll_limit(s.pitch, s.yaw - s.body) + 1e-9 for s in shots)
+        assert sum(abs(a.body - b.body) > 200 for a, b in zip(shots, shots[1:])) == 0
+
+
+def test_pick_out_w_shrinks_for_many_photos():
+    assert P.pick_out_w(3072, avail_mb=3000, n_frames=40) == 6144
+    assert P.pick_out_w(3072, avail_mb=3000, n_frames=120) == 4096

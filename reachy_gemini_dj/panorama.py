@@ -241,21 +241,56 @@ def _ring(n: int, pitch: float, offset: float = 0.0, roll: float = 0.0, alternat
     return out
 
 
-def plan(level: str = "full") -> list[Shot]:
+# Capture modes: rows of (shots, pitch, offset, roll) from the zenith row to the nadir row. More photos mean smaller
+# steps where near things shift between neighbouring photos (the camera is 4-5 cm off the head's rotation centre) and
+# better overlap for alignment, at about 2 s of capture and 3.5 s of stitching per photo. Coverage (share of the
+# sphere seen at least once / at least twice), measured with the full-field-of-view camera:
+#   ultra_fast 15: 96 % / 53 %   fast 25: 96 % / 89 %   regular 42: 96 % / 95 %   slow 60 and ultra_slow 80: 96 % / 96 %
+_UP, _DOWN = -PITCH_LIMIT, PITCH_LIMIT
+MODES: dict[str, dict] = {
+    "ultra_fast": {"label": "Ultra fast", "note": "preview: little overlap, steps and soft seams likely",
+                   "rows": [(5, _UP, .5, -31), (5, 0, .25), (5, _DOWN, .25, 40)]},
+    "fast": {"label": "Fast", "note": "good for most rooms",
+             "rows": [(6, _UP, .5, -31), (6, -12, .25), (6, 14, .75), (7, _DOWN, .25, 40)]},
+    "regular": {"label": "Regular", "note": "the default",
+                "rows": [(9, _UP, .5, -31), (12, -12, .25), (12, 14, .75), (9, _DOWN, .25, 40)]},
+    "slow": {"label": "Slow", "note": "smaller steps on near objects",
+             "rows": [(10, _UP, .5, -31), (12, -26, .25), (14, -4, .75), (14, 18, .25), (10, _DOWN, .5, 40)]},
+    "ultra_slow": {"label": "Ultra slow", "note": "smallest steps; the stitch may use a smaller picture size on the robot",
+                   "rows": [(12, _UP, .5, -31), (14, -30, .25), (14, -14, .75), (14, 2, .25), (14, 18, .75), (12, _DOWN, .25, 40)]},
+}
+DEFAULT_MODE = "regular"
+MODE_ALIASES = {"full": "regular", "quick": "fast"}
+
+
+def mode_shots(mode: str) -> int:
+    return sum(r[0] for r in MODES[MODE_ALIASES.get(mode, mode)]["rows"])
+
+
+def mode_estimate_s(mode: str) -> int:
+    """Rough total seconds on the robot (capture ~2.1 s and stitch ~3.6 s per photo, plus start and finish)."""
+    n = mode_shots(mode)
+    return int(round(2.1 * n + 3.6 * n + 30, -1))
+
+
+def modes_listing() -> list[dict]:
+    return [{"id": k, "label": v["label"], "shots": mode_shots(k), "seconds": mode_estimate_s(k), "note": v["note"]}
+            for k, v in MODES.items()]
+
+
+def plan(level: str = DEFAULT_MODE) -> list[Shot]:
     """Shots in serpentine order (the body never swings back across the whole range mid-capture).
 
     The camera sees ~94 x 62 degrees (87 x 56 inside the usable lens circle), so rows ~25 degrees apart overlap by half.
     Pitch is limited to +-40 and the camera rolls about its own axis, so looking up/down the only way to see further
     towards a pole is to roll the head: the top and bottom rows use the biggest roll the inverse kinematics solves
-    (roll_limit) and are dense, since every shot there reaches a bit further on one side.
-    full: 34 shots, 96 % of the sphere by area (everything from 69 degrees above to 76 below the horizon on every
-    meridian, a polar hole of ~18 / ~12 degrees radius that fill_poles completes); quick: 28 shots, ~95 %."""
-    if level == "quick":
-        rows = [_ring(8, -PITCH_LIMIT, .5, -31), _ring(6, -12, .25), _ring(6, 14, .75), _ring(8, PITCH_LIMIT, .25, 40)]
-    else:
-        rows = [_ring(9, -PITCH_LIMIT, .5, -31),               # rolled, towards the zenith
-                _ring(8, -12, .25), _ring(8, 14, .75),
-                _ring(9, PITCH_LIMIT, .25, 40)]                # rolled, towards the nadir
+    (roll_limit), since every shot there reaches a bit further on one side. All modes see ~96 % of the sphere by area
+    (everything from ~70 degrees above to ~77 below the horizon, a polar hole fill_poles completes). `level` is a key of
+    MODES ("full" and "quick" still work as "regular" and "fast")."""
+    level = MODE_ALIASES.get(level, level)
+    if level not in MODES:
+        raise ValueError(f"unknown 360 photo mode: {level!r}")
+    rows = [_ring(*r) for r in MODES[level]["rows"]]
     out: list[Shot] = []
     for k, row in enumerate(rows):
         row = sorted(row, key=lambda s: s.yaw, reverse=bool(k % 2))
@@ -830,7 +865,7 @@ def available_mb() -> float | None:
     return None
 
 
-def pick_out_w(frame_w: int, avail_mb: float | None = None, margin_mb: float = 1000.0) -> int:
+def pick_out_w(frame_w: int, avail_mb: float | None = None, margin_mb: float = 1000.0, n_frames: int = 40) -> int:
     """Equirect width for the stitch: matched to the photos' detail, and no bigger than the memory allows (an
     out-of-memory kill would take the robot's app with it). Needs the estimated peak plus margin_mb free."""
     if frame_w < 2000:
@@ -839,7 +874,7 @@ def pick_out_w(frame_w: int, avail_mb: float | None = None, margin_mb: float = 1
     if avail is None:
         return OUT_W_STEPS[1]
     for w in OUT_W_STEPS:
-        if 450 + 2000 * (w / 8192) ** 2 + margin_mb <= avail:
+        if 450 + 2000 * (w / 8192) ** 2 + 6 * max(0, n_frames - 40) + margin_mb <= avail:
             return w
     return OUT_W_STEPS[-1]
 
@@ -850,7 +885,7 @@ def stitch(frames: list[Frame], cam: Camera | None = None, out_w: int | None = N
     import cv2
     t0 = time.monotonic()
     cam = cam or Camera(size=frames[0].size)
-    out_w = out_w or pick_out_w(frames[0].size[0])
+    out_w = out_w or pick_out_w(frames[0].size[0], n_frames=len(frames))
     w, h = out_w, out_w // 2
     pad = w // 8
     info: dict = {"frames": len(frames), "out_w": out_w}
@@ -1083,6 +1118,7 @@ class PanoramaJob:
         self._st = {"state": "idle", "progress": 0.0, "step": "", "id": None, "error": None, "eta_s": None}
         self.full_res = True             # full sensor via the daemon's media release (live video pauses meanwhile)
         self.source = "stream"
+        self.mode = DEFAULT_MODE
         self.grabs: list[dict] = []
 
     # ------------------------------------------------------------------ API used by main.py / the voice tool
@@ -1093,7 +1129,10 @@ class PanoramaJob:
     def busy(self) -> bool:
         return self.status()["state"] in ("capturing", "stitching")
 
-    def start(self, source: str = "page") -> dict:
+    def start(self, source: str = "page", mode: str | None = None) -> dict:
+        mode = MODE_ALIASES.get(mode or DEFAULT_MODE, mode or DEFAULT_MODE)
+        if mode not in MODES:
+            return {"ok": False, "error": f"Unknown mode {mode!r}. Use one of: {', '.join(MODES)}."}
         with self._lock:
             if self._st["state"] in ("capturing", "stitching"):
                 return {"ok": False, "error": "A 360° photo is already being taken."}
@@ -1108,7 +1147,7 @@ class PanoramaJob:
             self._cancel.clear()
             self._st = {"state": "capturing", "progress": 0.0, "step": "Getting ready", "id": pid, "error": None,
                         "eta_s": None}
-        self._thread = threading.Thread(target=self._run, args=(pid, source), daemon=True, name="panorama")
+        self._thread = threading.Thread(target=self._run, args=(pid, source, mode), daemon=True, name="panorama")
         self._thread.start()
         return {"ok": True, "id": pid}
 
@@ -1165,7 +1204,8 @@ class PanoramaJob:
         with self._lock:
             self._st.update(kw)
 
-    def _run(self, pid: str, source: str) -> None:
+    def _run(self, pid: str, source: str, mode: str = DEFAULT_MODE) -> None:
+        self.mode = mode
         t0 = time.monotonic()
         held = False
         frames: list[Frame] = []
@@ -1175,7 +1215,7 @@ class PanoramaJob:
                 self.motion.hold_begin("360 photo")
                 held = True
             self.on_event("camera", f"Taking a 360° photo ({source})")
-            frames = self._capture(mini, t0)
+            frames = self._capture(mini, t0, mode)
             if held:
                 self.motion.hold_end()
                 held = False
@@ -1196,7 +1236,7 @@ class PanoramaJob:
             (self.store / f"{pid}.jpg").write_bytes(full)
             (self.store / f"{pid}_thumb.jpg").write_bytes(thumb)
             meta = {"created": datetime.now().isoformat(timespec="seconds"), "width": pano.shape[1], "height": pano.shape[0],
-                    "frames": len(frames), "source": self.source, "seconds": round(time.monotonic() - t0, 1),
+                    "frames": len(frames), "mode": self.mode, "source": self.source, "seconds": round(time.monotonic() - t0, 1),
                     "capture_s": round(t1 - t0, 1), "stitch_s": round(time.monotonic() - t1, 1),
                     "info": {k: v for k, v in info.items() if k != "gains"}}
             if self.grabs:
@@ -1245,9 +1285,9 @@ class PanoramaJob:
             self.delete(m.stem)
 
     # ------------------------------------------------------------------ capture
-    def _capture(self, mini, t0: float) -> list[Frame]:
+    def _capture(self, mini, t0: float, mode: str = DEFAULT_MODE) -> list[Frame]:
         from reachy_mini.utils import create_head_pose
-        shots = plan()
+        shots = plan(mode)
         frames: list[Frame] = []
         try:
             mini.enable_motors()
@@ -1289,7 +1329,7 @@ class PanoramaJob:
                 per_shot = dt if per_shot is None else 0.7 * per_shot + 0.3 * dt
                 left = len(shots) - k - 1
                 self._set(progress=round((k + 1) / len(shots), 3), step=f"Photo {k + 1} of {len(shots)}",
-                          eta_s=round(left * per_shot + 25, 0))
+                          eta_s=round(left * per_shot + 3.6 * len(shots) + 10, 0))
         finally:
             work.put(None)
             if still is not None:
@@ -1365,10 +1405,15 @@ class PanoramaJob:
             try:
                 mini.goto_target(head=head, body_yaw=body_yaw, duration=duration)
                 return
-            except Exception as e:                      # MoveBusyError: another move is finishing
-                if "busy" not in str(e).lower() and "already running" not in str(e).lower():
+            except Exception as e:
+                msg = str(e).lower()
+                if "busy" in msg or "already running" in msg:        # MoveBusyError: another move is finishing
+                    time.sleep(0.1)
+                elif "out of range" in msg and attempt < 3:          # the daemon stalled mid-move (e.g. its relay
+                    log.warning("move failed (%s); trying it again", e)   # reconnecting): a retry is a fresh move
+                    time.sleep(0.4)
+                else:
                     raise
-                time.sleep(0.1)
         raise RuntimeError("The robot was busy with another move.")
 
     @staticmethod

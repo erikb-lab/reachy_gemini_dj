@@ -136,6 +136,10 @@ class PoseName(BaseModel):
     name: str
 
 
+class PanoramaCapture(BaseModel):
+    mode: str | None = None       # ultra_fast | fast | regular | slow | ultra_slow (default regular)
+
+
 class LearnToggle(BaseModel):
     on: bool
 
@@ -362,7 +366,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.8.56",
+                "version": "0.9.0",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
@@ -670,8 +674,13 @@ class ReachyGeminiDJ(ReachyMiniApp):
         # 360° photos. capture starts the robot turning (~34 photos, then a stitch on the robot); the page polls status.
         # Photos are kept on the robot in ~/.reachy_gemini_dj/panoramas (newest 30), as 2:1 JPEGs with GPano metadata.
         @app.post("/api/panorama/capture")
-        def panorama_capture():
-            return self.panorama.start("page")
+        def panorama_capture(req: PanoramaCapture = None):
+            return self.panorama.start("page", req.mode if req else None)
+
+        @app.get("/api/panorama/modes")
+        def panorama_modes():
+            from .panorama import DEFAULT_MODE, modes_listing
+            return {"default": DEFAULT_MODE, "modes": modes_listing()}
 
         @app.get("/api/panorama/status")
         def panorama_status():
@@ -823,7 +832,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                                 frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.8.56...")
+        log.info("Starting Reachy Gemini DJ v0.9.0...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot

@@ -2,6 +2,8 @@
    variables from settings.css; the viewer is always dark, like any photo viewer. */
 #rp-panorama .pano-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 #rp-panorama .pano-row .pn-btn.primary { min-width: 180px; }
+#rp-panorama .pano-row select { flex: 1 1 220px; width: auto; min-width: 0; }
+#rp-panorama .pano-mode-note { margin: -4px 0 12px; font-size: 13px; }
 #rp-panorama [hidden] { display: none !important; }
 .pn-btn.quiet { background: transparent; border: 1px solid var(--p-border); color: var(--p-fg); }
 a.pn-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
