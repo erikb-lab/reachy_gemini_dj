@@ -362,7 +362,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             )
 
             return {
-                "version": "0.8.0",
+                "version": "0.8.55",
                 "gemini": g_state,
                 "model": self.config.model if self.voice.active_name == "gemini" else "local brain",
                 "error": g_err,
@@ -667,7 +667,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                               "Could not clear: " + ", ".join(res["cleared"][n]["label"] for n in res["faults"]))
             return {"ok": not res["faults"], **res}
 
-        # 360° photos. capture starts the robot turning (~40 photos, then a stitch on the robot); the page polls status.
+        # 360° photos. capture starts the robot turning (~34 photos, then a stitch on the robot); the page polls status.
         # Photos are kept on the robot in ~/.reachy_gemini_dj/panoramas (newest 30), as 2:1 JPEGs with GPano metadata.
         @app.post("/api/panorama/capture")
         def panorama_capture():
@@ -823,7 +823,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                                 frc_enabled=bool(self.config.nexus_api_key or self.config.tba_api_key))
 
     def run(self, reachy_mini: ReachyMini, stop_event: threading.Event) -> None:
-        log.info("Starting Reachy Gemini DJ v0.8.0...")
+        log.info("Starting Reachy Gemini DJ v0.8.55...")
         self.record_event("info", "Reachy Gemini DJ starting")
 
         # Initialize Motion subsystem connected to live robot

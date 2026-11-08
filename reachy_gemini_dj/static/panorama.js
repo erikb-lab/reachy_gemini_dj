@@ -63,7 +63,7 @@
     card.appendChild(els.prog);
     els.err = h('div', { class: 'pano-err', role: 'alert', hidden: '' });
     card.appendChild(els.err);
-    card.appendChild(h('p', { class: 'pn-muted', text: 'The robot turns all the way around, taking about 40 photos in under a minute, then stitches them on the robot. Stand clear of it ' +
+    card.appendChild(h('p', { class: 'pn-muted', text: 'The robot turns all the way around, taking about 34 sharp full-resolution photos (live video pauses for about 1 minute), then stitches them on the robot. Stand clear of it ' +
       'and step out of the shot, or you will show up in the photo.' }));
     els.count = h('span', { class: 'pano-count' });
     card.appendChild(h('h3', {}, ['Gallery ', els.count]));

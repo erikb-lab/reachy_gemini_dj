@@ -30,22 +30,32 @@ def test_camera_rotation_is_orthonormal_even_if_the_pose_is_not():
 
 
 # ------------------------------------------------------------------------------------------------- the plan ---
-@pytest.mark.parametrize("level,n", [("full", 40), ("quick", 28)])
+@pytest.mark.parametrize("level,n", [("full", 34), ("quick", 28)])
 def test_plan_reachable_and_serpentine(level, n):
     shots = P.plan(level)
     assert len(shots) == n
     for s in shots:
         assert -180 <= s.yaw <= 180 and abs(s.pitch) <= P.PITCH_LIMIT and abs(s.body) <= P.BODY_LIMIT
         assert abs(s.yaw - s.body) <= P.HEAD_TURN_LIMIT + 1e-9
+        assert abs(s.roll) <= P.roll_limit(s.pitch, s.yaw - s.body) + 1e-9      # solvable by the robot's IK
     # never swings the body back across the whole range between neighbouring shots, except when changing row
     jumps = sum(abs(a.body - b.body) > 200 for a, b in zip(shots, shots[1:]))
     assert jumps == 0
 
 
-def test_full_plan_sees_most_of_the_sphere():
-    cov = P.coverage(P.plan("full"), P.Camera(), 360)
-    assert cov["sphere"] > 0.84
-    assert cov["full_ring_up_to"] > 50 and cov["full_ring_down_to"] < -50
+def test_roll_limit_matches_the_ik_envelope():
+    # from the robot's own inverse kinematics: roll shrinks towards the up-looking pitch limit and with head-body yaw
+    assert P.roll_limit(-40) == 30 and P.roll_limit(-34) == 34 and P.roll_limit(40) == 37
+    assert P.roll_limit(-40, 20) == 26 < P.roll_limit(-40, 0)
+    assert P.roll_limit(-40, 90) == P.roll_limit(-40, 20)            # beyond HEAD_TURN_LIMIT: the worst case
+
+
+@pytest.mark.parametrize("level,sphere", [("full", 0.95), ("quick", 0.94)])
+def test_plans_see_most_of_the_sphere(level, sphere):
+    # the full-field-of-view camera (3072x1728), which is what the robot captures with
+    cov = P.coverage(P.plan(level), P.Camera(size=(3072, 1728)), 360)
+    assert cov["sphere"] > sphere
+    assert cov["full_ring_up_to"] > 65 and cov["full_ring_down_to"] < -70
 
 
 # ---------------------------------------------------------------------------------------------- pointing ---
@@ -171,3 +181,19 @@ def test_job_refuses_without_robot_or_movement(tmp_path):
     assert not job(tmp_path).start()["ok"]
     j = P.PanoramaJob(get_mini=lambda: object(), store=tmp_path, motion_enabled=lambda: False)
     assert "Movement" in j.start()["error"]
+
+
+def test_pick_out_w_follows_photo_detail_and_memory():
+    assert P.pick_out_w(1280, avail_mb=100) == P.OUT_W_STREAM            # the 720p stream: ~5600 px of detail
+    assert P.pick_out_w(3072, avail_mb=8000) == 8192
+    assert P.pick_out_w(3072, avail_mb=3100) == 6144                     # a robot with ~3 GB free
+    assert P.pick_out_w(3072, avail_mb=900) == 4096                      # never refuse, just go smaller
+    assert P.pick_out_w(3072, avail_mb=None) in P.OUT_W_STEPS
+
+
+def test_fold_wrap_keeps_size_and_blends_the_seam():
+    w, pad = 256, 32
+    canvas = np.full((16, w + 2 * pad, 3), 100, np.uint8)
+    mask = np.full((16, w + 2 * pad), 255, np.uint8)
+    out, om = P.fold_wrap(canvas, mask, w, pad)
+    assert out.shape == (16, w, 3) and out.dtype == np.uint8 and (out == 100).all() and (om == 255).all()
