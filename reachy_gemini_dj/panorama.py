@@ -1131,6 +1131,10 @@ class PanoramaJob:
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self._st = {"state": "idle", "progress": 0.0, "step": "", "id": None, "error": None, "eta_s": None}
+        try:
+            self._tidy_raw()
+        except Exception as e:
+            log.warning("could not tidy the raw photos: %s", e)
         self.full_res = True             # full sensor via the daemon's media release (live video pauses meanwhile)
         self.source = "stream"
         self.mode = DEFAULT_MODE
@@ -1267,6 +1271,7 @@ class PanoramaJob:
             self._set(state="done", step="Done", progress=1.0, eta_s=0)
         except Exception as e:
             log.exception("360 photo failed")
+            self._drop_raw(pid)                          # no photo came out of it: its raw frames are of no use
             self._set(state="error", error=f"{type(e).__name__}: {e}"[:200], step="Failed", eta_s=None)
             self.on_event("error", f"360° photo failed: {e}")
         finally:
@@ -1275,6 +1280,29 @@ class PanoramaJob:
                     self.motion.hold_end()
                 except Exception:
                     pass
+
+    def _raw_owner(self) -> str | None:
+        """ID of the capture the raw frames in last_raw came from (None: no raw frames, or from before ids were kept)."""
+        try:
+            return (self.store / "last_raw" / "id.txt").read_text().strip() or None
+        except OSError:
+            return None
+
+    def _drop_raw(self, pid: str) -> None:
+        """Remove the raw frames if they belong to this capture and it has no finished photo."""
+        if self._raw_owner() == pid and not (self.store / f"{pid}.json").exists():
+            shutil.rmtree(self.store / "last_raw", ignore_errors=True)
+
+    def _tidy_raw(self) -> None:
+        """At start-up: remove raw frames left by a capture that never finished (the app stopped mid-stitch), or that
+        remain when no photo is left."""
+        raw = self.store / "last_raw"
+        if not raw.exists():
+            return
+        owner = self._raw_owner()
+        orphan = owner is not None and not (self.store / f"{owner}.json").exists()
+        if orphan or not any(self.store.glob("*.json")):
+            shutil.rmtree(raw, ignore_errors=True)
 
     def _save_raw(self, frames: list[Frame], pid: str = "") -> None:
         """Keep the last capture's photos and poses (store/last_raw, replaced each time) so it can be re-stitched.

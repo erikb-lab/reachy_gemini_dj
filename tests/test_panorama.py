@@ -294,3 +294,38 @@ def test_voice_tool_starts_a_capture_in_the_requested_mode():
     r = s.execute_tool("take_360_photo", {})
     assert r["ok"] and "regular" in r["result"] and "42 photos" in r["result"]
     assert "error" in s.execute_tool("take_360_photo", {"mode": "turbo"})
+
+
+def _photo(tmp_path, pid):
+    (tmp_path / f"{pid}.jpg").write_bytes(b"\xff\xd8x")
+    (tmp_path / f"{pid}_thumb.jpg").write_bytes(b"\xff\xd8t")
+    (tmp_path / f"{pid}.json").write_text(json.dumps({"created": "x", "frames": 8}))
+
+
+def test_a_failed_capture_removes_its_own_raw_frames(tmp_path):
+    j = job(tmp_path)
+    j._save_raw([P.Frame(np.zeros((8, 8, 3), np.uint8), np.eye(4))], "20261108-030208")
+    j._drop_raw("20261108-999999")                           # somebody else's id: untouched
+    assert (tmp_path / "last_raw").exists()
+    j._drop_raw("20261108-030208")
+    assert not (tmp_path / "last_raw").exists()
+
+
+def test_a_finished_photos_raw_frames_are_not_dropped_as_failed(tmp_path):
+    j = job(tmp_path)
+    _photo(tmp_path, "20261108-030208")
+    j._save_raw([P.Frame(np.zeros((8, 8, 3), np.uint8), np.eye(4))], "20261108-030208")
+    j._drop_raw("20261108-030208")
+    assert (tmp_path / "last_raw").exists()
+
+
+def test_start_up_tidies_raw_frames_of_a_capture_that_never_finished(tmp_path):
+    _photo(tmp_path, "20261108-025301")
+    j = job(tmp_path)
+    j._save_raw([P.Frame(np.zeros((8, 8, 3), np.uint8), np.eye(4))], "20261108-030208")    # app died mid-stitch
+    job(tmp_path)                                                                          # next start
+    assert not (tmp_path / "last_raw").exists() and (tmp_path / "20261108-025301.jpg").exists()
+    j2 = job(tmp_path)
+    j2._save_raw([P.Frame(np.zeros((8, 8, 3), np.uint8), np.eye(4))], "20261108-025301")   # a finished photo's frames stay
+    job(tmp_path)
+    assert (tmp_path / "last_raw").exists()
