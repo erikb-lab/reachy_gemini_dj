@@ -1,0 +1,173 @@
+"""reachy_gemini_dj/panorama.py: shot plan, pointing, alignment and stitching (synthetic data, no robot)."""
+import json
+import math
+
+import numpy as np
+import pytest
+
+from reachy_gemini_dj import panorama as P
+
+cv2 = pytest.importorskip("cv2")
+
+
+def pose(roll=0.0, pitch=0.0, yaw=0.0, scale=1.0):
+    T = np.eye(4)
+    T[:3, :3] = P.rot_xyz(roll, pitch, yaw) * scale
+    return T
+
+
+# ------------------------------------------------------------------------------------------------ geometry ---
+def test_head_ypr_round_trip():
+    for y, p, r in [(0, 0, 0), (37, -20, 0), (-170, 35, 10), (120, 12.5, -22)]:
+        got = P.head_ypr(pose(r, p, y))
+        assert got == pytest.approx((y, p, r), abs=1e-9)
+
+
+def test_camera_rotation_is_orthonormal_even_if_the_pose_is_not():
+    # the daemon's pose matrices are ~0.05 % off a rotation; that made the bundle adjustment drift
+    R = P.camera_rotation(pose(5, -12, 40, scale=1.0005))
+    assert np.allclose(R.T @ R, np.eye(3), atol=1e-12) and np.linalg.det(R) == pytest.approx(1.0)
+
+
+# ------------------------------------------------------------------------------------------------- the plan ---
+@pytest.mark.parametrize("level,n", [("full", 40), ("quick", 28)])
+def test_plan_reachable_and_serpentine(level, n):
+    shots = P.plan(level)
+    assert len(shots) == n
+    for s in shots:
+        assert -180 <= s.yaw <= 180 and abs(s.pitch) <= P.PITCH_LIMIT and abs(s.body) <= P.BODY_LIMIT
+        assert abs(s.yaw - s.body) <= P.HEAD_TURN_LIMIT + 1e-9
+    # never swings the body back across the whole range between neighbouring shots, except when changing row
+    jumps = sum(abs(a.body - b.body) > 200 for a, b in zip(shots, shots[1:]))
+    assert jumps == 0
+
+
+def test_full_plan_sees_most_of_the_sphere():
+    cov = P.coverage(P.plan("full"), P.Camera(), 360)
+    assert cov["sphere"] > 0.84
+    assert cov["full_ring_up_to"] > 50 and cov["full_ring_down_to"] < -50
+
+
+# ---------------------------------------------------------------------------------------------- pointing ---
+class LaggyMini:
+    """Fake robot whose head stops short in pitch and whose body stops short near the ends (as measured)."""
+
+    def __init__(self):
+        self.pose, self.moves = np.eye(4), []
+
+    def goto_target(self, head, body_yaw, duration):
+        y, p, r = P.head_ypr(head)
+        b = math.degrees(body_yaw)
+        self.moves.append((y, p, b))
+        lag_y = 0.06 * b if abs(b) > 100 else 0.0
+        self.pose = pose(r, p - 8 * np.sign(p), y - lag_y)
+
+    def get_current_head_pose(self):
+        return self.pose
+
+
+def chp(roll, pitch, yaw, degrees=True):
+    return pose(roll, pitch, yaw)
+
+
+def job(tmp_path):
+    return P.PanoramaJob(get_mini=lambda: None, store=tmp_path, motion_enabled=lambda: True)
+
+
+def test_point_corrects_lag(tmp_path):
+    m = LaggyMini()
+    job(tmp_path)._point(m, P.Shot(60, -12.5), 0.5, chp)
+    y, p, _ = P.head_ypr(m.get_current_head_pose())
+    assert abs(p + 12.5) < P.POINT_TOL_DEG and abs(y - 60) < P.POINT_TOL_DEG
+    assert len(m.moves) == 2
+
+
+def test_point_stops_at_the_limit(tmp_path):
+    m = LaggyMini()
+    job(tmp_path)._point(m, P.Shot(-180, P.PITCH_LIMIT), 0.5, chp)
+    assert len(m.moves) == 1                          # asking for more than the limit would not help
+    assert all(abs(p) <= P.PITCH_LIMIT for _, p, _ in m.moves)
+
+
+# --------------------------------------------------------------------------------------------- alignment ---
+def synthetic_matches(cam, true_R, rng, per_pair=60):
+    """Pixel matches between overlapping photos of random far-away points, from the true orientations."""
+    pts = rng.normal(size=(6000, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    proj = []
+    for R in true_R:
+        c = pts @ R                                       # world -> camera
+        ok = c[:, 2] > 0.3
+        pix, _ = cv2.projectPoints(c[ok], np.zeros(3), np.zeros(3), cam.K, cam.D)
+        pix = pix.reshape(-1, 2)
+        ins = (pix[:, 0] > 5) & (pix[:, 0] < cam.w - 5) & (pix[:, 1] > 5) & (pix[:, 1] < cam.h - 5)
+        idx = np.flatnonzero(ok)[ins]
+        proj.append(dict(zip(idx.tolist(), pix[ins])))
+    out = []
+    for i in range(len(true_R)):
+        for j in range(i + 1, len(true_R)):
+            common = sorted(set(proj[i]) & set(proj[j]))[:per_pair]
+            if len(common) >= 12:
+                out.append((i, j, np.array([proj[i][k] for k in common]), np.array([proj[j][k] for k in common])))
+    return out
+
+
+def test_refine_recovers_pose_errors():
+    rng = np.random.default_rng(1)
+    cam = P.Camera()
+    shots = [P.Shot(y, p) for p in (-25, 0, 25) for y in range(-180, 180, 40)]
+    true_R = [P.camera_rotation(pose(0, s.pitch, s.yaw)) for s in shots]
+    frames = []
+    for s in shots:
+        noisy = pose(rng.normal(0, 1.5), s.pitch + rng.normal(0, 1.5), s.yaw + rng.normal(0, 1.5))
+        frames.append(P.Frame(None, noisy))
+    before = max(math.degrees(math.acos(np.clip((np.trace(f.R @ t.T) - 1) / 2, -1, 1))) for f, t in zip(frames, true_R))
+    info = P.refine(cam, frames, synthetic_matches(cam, true_R, rng), iters=20)
+    assert info["median_deg"] < 0.05
+    # relative orientations come out right to a fraction of a degree (the prior pulls each photo a little)
+    rel = [f.R @ frames[0].R.T @ true_R[0] @ t.T for f, t in zip(frames, true_R)]
+    err = max(math.degrees(math.acos(np.clip((np.trace(E) - 1) / 2, -1, 1))) for E in rel)
+    assert err < 0.5 < before
+
+
+# ---------------------------------------------------------------------------------------- stitch + files ---
+def test_stitch_and_encode_small_synthetic_room():
+    rng = np.random.default_rng(0)
+    w, h = 640, 360
+    cam = P.Camera(size=(w, h))
+    world = cv2.resize(rng.integers(0, 255, (64, 128, 3), dtype=np.uint8), (2048, 1024), interpolation=cv2.INTER_CUBIC)
+    frames = []
+    for s in P.plan("quick"):
+        R = P.camera_rotation(pose(s.roll, s.pitch, s.yaw))
+        gx, gy = np.meshgrid(np.arange(w), np.arange(h))
+        rays = cam.rays(np.stack([gx.ravel(), gy.ravel()], 1).astype(np.float64)) @ R.T
+        lon = np.arctan2(rays[:, 1], rays[:, 0]); lat = np.arcsin(np.clip(rays[:, 2], -1, 1))
+        mx = P.lon_to_x(lon, 2048).reshape(h, w).astype(np.float32) % 2048
+        my = P.lat_to_y(lat, 1024).reshape(h, w).astype(np.float32)
+        frames.append(P.Frame(cv2.remap(world, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP), pose(s.roll, s.pitch, s.yaw)))
+    pano, info = P.stitch(frames, out_w=512)
+    assert pano.shape == (256, 512, 3) and info["frames"] == len(frames)
+    assert info["align"]["median_deg"] < 0.5
+    full, thumb = P.encode(pano, len(frames))
+    assert full[:2] == b"\xff\xd8" and b"GPano:ProjectionType" in full and b"equirectangular" in full
+    assert cv2.imdecode(np.frombuffer(thumb, np.uint8), cv2.IMREAD_COLOR).shape[1] == 640
+
+
+def test_job_files_list_path_delete(tmp_path):
+    j = job(tmp_path)
+    pid = "20261108-000049"
+    (tmp_path / f"{pid}.jpg").write_bytes(b"\xff\xd8x")
+    (tmp_path / f"{pid}_thumb.jpg").write_bytes(b"\xff\xd8t")
+    (tmp_path / f"{pid}.json").write_text(json.dumps({"created": "x", "frames": 40}))
+    (tmp_path / "last_raw").mkdir()
+    assert [i["id"] for i in j.list()] == [pid]
+    assert j.path(pid) and j.path(pid, thumb=True)
+    for bad in ("../secret", "20261108-000049/../../x", "", None):
+        assert j.path(bad) is None and j.delete(bad) is False
+    assert j.delete(pid) and j.list() == []
+
+
+def test_job_refuses_without_robot_or_movement(tmp_path):
+    assert not job(tmp_path).start()["ok"]
+    j = P.PanoramaJob(get_mini=lambda: object(), store=tmp_path, motion_enabled=lambda: False)
+    assert "Movement" in j.start()["error"]

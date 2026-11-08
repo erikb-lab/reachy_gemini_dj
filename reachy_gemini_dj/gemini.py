@@ -161,6 +161,13 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 required=["name"],
             ),
         ),
+        types.FunctionDeclaration(
+            name="take_360_photo",
+            description="Take a 360-degree photo sphere of the room: the robot turns all the way around for about a "
+                        "minute, then the photo appears on the control page (Robot tab). Use when asked for a 360 "
+                        "photo, panorama or photo sphere. Tell people to step out of the shot.",
+            parameters=types.Schema(type="OBJECT", properties={}),
+        ),
         # FRC (FIRST Robotics Competition) tools: QR scan, FRC Nexus queuing, The Blue Alliance
         types.FunctionDeclaration(
             name="scan_qr",
@@ -693,6 +700,16 @@ class GeminiSession:
             elif name == "quiet_mode":
                 quiet = getattr(self, "quiet", None)
                 return quiet.enter(args.get("minutes", 30)) if quiet else {"error": "Quiet mode is not ready yet"}
+
+            elif name == "take_360_photo":
+                pano = getattr(self, "panorama", None)
+                if pano is None:
+                    return {"error": "360 photos are not ready yet"}
+                res = pano.start("voice")
+                if not res.get("ok"):
+                    return {"error": res.get("error", "Could not start the 360 photo")}
+                return {"ok": True, "result": "Started: turning around for about a minute; the photo will be on the "
+                                              "control page's Robot tab."}
 
             elif name == "scan_qr" or name.startswith("frc_"):
                 frc = getattr(self, "frc", None)

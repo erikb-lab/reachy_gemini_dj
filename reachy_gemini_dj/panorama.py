@@ -1,0 +1,1042 @@
+"""360° photo: the robot turns its body and head through a grid of poses, takes a photo at each, and stitches them
+into one equirectangular ("photo sphere") JPEG with Google's GPano metadata, so any 360 viewer shows it.
+
+How it works
+* Plan: rows of shots looking up, level and down. The BODY does the turning (±160°, head yaw only tops it up to
+  ±180°), so the head stays centred where the Stewart platform can tilt furthest. Extra shots with the head rolled
+  sideways while looking up / down push the long diagonal of the frame towards the zenith and nadir.
+* Capture: after each move the robot waits until the head is still, then takes a fresh frame and records the head
+  pose the motors actually reached (not the one that was asked for: they differ by 1-3°).
+* Align: every photo starts at its measured orientation. Features matched between overlapping photos then refine
+  all orientations (and the lens focal length) at once with a small robust bundle adjustment that is held close to
+  the measured poses, so the horizon stays level and photos of blank walls/ceilings keep their measured place.
+* Exposure: the camera's auto exposure and white balance change from photo to photo; per-photo, per-channel gains
+  are solved from the overlaps so they match.
+* Blend: OpenCV's graph-cut seam finder picks seams through low-detail areas, then a multi-band blender hides them.
+  The 360° wrap is handled by stitching a slightly wider canvas and cross-fading the two ends.
+* Poles: the robot can't look straight up or down. The small caps it cannot see are filled from their surroundings
+  in a top-down (azimuthal) view, so there is no hole or smear line at the poles.
+
+Everything here except ``capture()`` is pure numpy/OpenCV and is tested on the desktop with recorded frames.
+"""
+from __future__ import annotations
+
+import io
+import json
+import logging
+import math
+import os
+import queue
+import shutil
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+
+log = logging.getLogger(__name__)
+
+# camera optical axes (x right, y down, z forward) expressed in the head frame (x forward, y left, z up)
+CAM_IN_HEAD = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]])
+
+# Reachy Mini Wireless camera, 1280x720 stream. Self-calibrated from feature matches between photos taken at known
+# head poses (the SDK's K is for the Lite camera's sensor and is ~30-60% off for this stream): square pixels,
+# f = 892 px (70° x 44° field of view), mild radial distortion, and the camera sits ~2° down / 2.5° sideways in the head.
+CALIB_SIZE = (1280, 720)
+DEFAULT_K = np.array([[891.77, 0.0, 640.0], [0.0, 891.77, 360.0], [0.0, 0.0, 1.0]])
+DEFAULT_D = np.array([0.0017, 0.0982, 0.0, 0.0, 0.0])
+MOUNT_ROTVEC = np.array([-0.00285, 0.03769, -0.04313])     # radians, applied in the head frame
+
+BODY_LIMIT = 160.0            # official body yaw range, degrees
+PITCH_LIMIT = 40.0            # official head pitch / roll range
+OUT_W = 4096                  # equirect output width (the camera gives ~600 px/rad, i.e. ~3800 px around)
+JPEG_QUALITY = 90
+KEEP = 30                     # photos kept on the robot; the oldest are deleted beyond this
+
+
+# ----------------------------------------------------------------------------------------------- geometry ---
+def rot_xyz(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    """Rotation like reachy_mini.utils.create_head_pose (scipy 'xyz' extrinsic, degrees): Rz(yaw) Ry(pitch) Rx(roll)."""
+    r, p, y = (math.radians(v) for v in (roll, pitch, yaw))
+    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
+    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+    return rz @ ry @ rx
+
+
+def skew(v: np.ndarray) -> np.ndarray:
+    return np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+
+
+def expmap(w: np.ndarray) -> np.ndarray:
+    th = float(np.linalg.norm(w))
+    if th < 1e-12:
+        return np.eye(3) + skew(w)
+    k = skew(w / th)
+    return np.eye(3) + math.sin(th) * k + (1 - math.cos(th)) * (k @ k)
+
+
+def lonlat_to_dir(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    cl = np.cos(lat)
+    return cl * np.cos(lon), cl * np.sin(lon), np.sin(lat)
+
+
+def x_to_lon(x, w: int):
+    """Equirect column -> longitude (rad). The centre column looks forward; moving right turns right (clockwise)."""
+    return math.pi - (np.asarray(x, dtype=np.float64) + 0.5) * (2 * math.pi / w)
+
+
+def y_to_lat(y, h: int):
+    return math.pi / 2 - (np.asarray(y, dtype=np.float64) + 0.5) * (math.pi / h)
+
+
+def lon_to_x(lon, w: int):
+    return (math.pi - np.asarray(lon)) * (w / (2 * math.pi)) - 0.5
+
+
+def lat_to_y(lat, h: int):
+    return (math.pi / 2 - np.asarray(lat)) * (h / math.pi) - 0.5
+
+
+# ---------------------------------------------------------------------------------------------- the camera ---
+class Camera:
+    """Lens model: pixel <-> ray in camera coordinates, using OpenCV's (rational + thin prism) distortion."""
+
+    def __init__(self, K=None, D=None, size=CALIB_SIZE):
+        import cv2
+        if K is None:                      # the calibration, scaled if the stream is another size (same field of view)
+            K = DEFAULT_K.copy()
+            sx, sy = size[0] / CALIB_SIZE[0], size[1] / CALIB_SIZE[1]
+            K[0] *= sx
+            K[1] *= sy
+        self.K = np.array(K, dtype=np.float64)
+        self.D = np.array(DEFAULT_D if D is None else D, dtype=np.float64).ravel()
+        self.w, self.h = int(size[0]), int(size[1])
+        # the normalised-coordinate box every pixel maps into: rays outside it would fold back into the image
+        n = 64
+        border = np.concatenate([
+            np.stack([np.linspace(0, self.w - 1, n), np.zeros(n)], 1), np.stack([np.linspace(0, self.w - 1, n), np.full(n, self.h - 1)], 1),
+            np.stack([np.zeros(n), np.linspace(0, self.h - 1, n)], 1), np.stack([np.full(n, self.w - 1), np.linspace(0, self.h - 1, n)], 1)])
+        nb = self.undistort(border)
+        top, bot, left, right = nb[:n], nb[n:2 * n], nb[2 * n:3 * n], nb[3 * n:]
+        self.box = (float(left[:, 0].max()), float(right[:, 0].min()), float(top[:, 1].max()), float(bot[:, 1].min()))
+        # dense table normalised (x, y) -> pixel, so warping never calls projectPoints per output pixel
+        x0, x1, y0, y1 = self.box
+        self.lut_n = 768
+        gx, gy = np.meshgrid(np.linspace(x0, x1, self.lut_n), np.linspace(y0, y1, self.lut_n))
+        pts = np.stack([gx.ravel(), gy.ravel(), np.ones(gx.size)], 1)
+        pix, _ = cv2.projectPoints(pts, np.zeros(3), np.zeros(3), self.K, self.D)
+        pix = pix.reshape(self.lut_n, self.lut_n, 2).astype(np.float32)
+        self.lut_x, self.lut_y = np.ascontiguousarray(pix[..., 0]), np.ascontiguousarray(pix[..., 1])
+        self.half_fov = (math.degrees(math.atan(max(-x0, x1))), math.degrees(math.atan(max(-y0, y1))))
+
+    def undistort(self, pix) -> np.ndarray:
+        import cv2
+        p = np.asarray(pix, dtype=np.float64).reshape(-1, 1, 2)
+        crit = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 60, 1e-10)
+        try:
+            n = cv2.undistortPointsIter(p, self.K, self.D, None, None, crit)
+        except AttributeError:
+            n = cv2.undistortPoints(p, self.K, self.D)
+        return n.reshape(-1, 2)
+
+    def rays(self, pix, scale=(1.0, 1.0)) -> np.ndarray:
+        """Unit rays (camera coordinates) for pixels; scale refines the focal length (normalised coords / scale)."""
+        n = self.undistort(pix)
+        v = np.stack([n[:, 0] / scale[0], n[:, 1] / scale[1], np.ones(len(n))], 1)
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    def normalised_to_pixel_maps(self, nx: np.ndarray, ny: np.ndarray):
+        """Look up pixel maps (for cv2.remap) for normalised coordinates via the dense table."""
+        import cv2
+        x0, x1, y0, y1 = self.box
+        fx = ((nx - x0) * ((self.lut_n - 1) / (x1 - x0))).astype(np.float32)
+        fy = ((ny - y0) * ((self.lut_n - 1) / (y1 - y0))).astype(np.float32)
+        mx = cv2.remap(self.lut_x, fx, fy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=-1e4)
+        my = cv2.remap(self.lut_y, fx, fy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=-1e4)
+        return mx, my
+
+    def inside(self, nx, ny, margin=0.0):
+        x0, x1, y0, y1 = self.box
+        return (nx > x0 + margin) & (nx < x1 - margin) & (ny > y0 + margin) & (ny < y1 - margin)
+
+
+def head_ypr(head_pose) -> tuple[float, float, float]:
+    """(yaw, pitch, roll) in degrees of a 4x4 head pose, matching create_head_pose (extrinsic xyz)."""
+    R = np.asarray(head_pose, dtype=np.float64)[:3, :3]
+    return (math.degrees(math.atan2(R[1, 0], R[0, 0])), math.degrees(math.asin(max(-1.0, min(1.0, -R[2, 0])))),
+            math.degrees(math.atan2(R[2, 1], R[2, 2])))
+
+
+def camera_rotation(head_pose) -> np.ndarray:
+    """World-from-camera rotation for a 4x4 head pose (the head pose is in the world frame, body yaw included).
+    The daemon's pose matrix is not exactly orthonormal (det ~1.0005), which makes the bundle adjustment indefinite,
+    so it is snapped to the nearest rotation first."""
+    u, _, vt = np.linalg.svd(np.asarray(head_pose, dtype=np.float64)[:3, :3])
+    rot = u @ vt
+    if np.linalg.det(rot) < 0:
+        rot = u @ np.diag([1.0, 1.0, -1.0]) @ vt
+    return rot @ expmap(MOUNT_ROTVEC) @ CAM_IN_HEAD
+
+
+# --------------------------------------------------------------------------------------------- the shot plan ---
+@dataclass
+class Shot:
+    yaw: float              # world yaw of the head, degrees (+ = left)
+    pitch: float            # + = looking down
+    roll: float = 0.0
+
+    @property
+    def body(self) -> float:
+        return max(-BODY_LIMIT, min(BODY_LIMIT, self.yaw))
+
+
+def _ring(n: int, pitch: float, offset: float = 0.0, roll: float = 0.0, alternate: bool = False) -> list[Shot]:
+    return [Shot(-180 + (i + offset) * 360 / n, pitch, (roll if i % 2 else -roll) if alternate else roll)
+            for i in range(n)]
+
+
+def plan(level: str = "full") -> list[Shot]:
+    """Shots in serpentine order (the body never swings back across the whole range mid-capture).
+
+    The camera sees ~70 x 42 degrees, so four rows 25 degrees apart overlap by ~17 degrees (enough to match features).
+    The head reaches pitch +-37 degrees; rolling it while looking up/down gains a few more degrees towards the poles
+    (the furthest combinations it really reaches: asking for more only makes the daemon clamp and log IK warnings).
+    full: 40 shots, ~85% of the sphere seen (everything from 57 below to 60 above the horizon); quick: 28 shots, ~84%."""
+    if level == "quick":
+        rows = [_ring(6, -PITCH_LIMIT), _ring(8, -12.5, .5), _ring(8, 12.5), _ring(6, PITCH_LIMIT, .5)]
+    else:
+        rows = [_ring(5, -34, .25, 28, True),                  # rolled, towards the zenith
+                _ring(7, -PITCH_LIMIT), _ring(8, -12.5, .5), _ring(8, 12.5), _ring(7, PITCH_LIMIT, .5),
+                _ring(5, 34.5, .25, 22, True)]                 # rolled, towards the nadir
+    out: list[Shot] = []
+    for k, row in enumerate(rows):
+        row = sorted(row, key=lambda s: s.yaw, reverse=bool(k % 2))
+        out.extend(row)
+    return out
+
+
+# --------------------------------------------------------------------------------------------- alignment ---
+@dataclass
+class Frame:
+    image: np.ndarray                   # BGR, as captured
+    pose: np.ndarray                    # 4x4 measured head pose
+    R: np.ndarray = None                # world-from-camera, refined
+
+    def __post_init__(self):
+        if self.R is None:
+            self.R = camera_rotation(self.pose)
+
+
+_CLAHE = None
+
+
+def _feature(image: np.ndarray, scale: float = 0.5):
+    """SIFT keypoints (full-resolution pixels) and descriptors of one photo."""
+    import cv2
+    global _CLAHE
+    if _CLAHE is None:
+        _CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    g = cv2.resize(g, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    kp, des = cv2.SIFT_create(nfeatures=900, contrastThreshold=0.02).detectAndCompute(_CLAHE.apply(g), None)
+    if des is None or not kp:
+        return np.zeros((0, 2)), None
+    return np.array([k.pt for k in kp], dtype=np.float64) / scale, des
+
+
+def _overlap(Ri: np.ndarray, Rj: np.ndarray, max_angle_deg: float = 85.0) -> bool:
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(Ri[:, 2] @ Rj[:, 2]))))) < max_angle_deg
+
+
+class Matcher:
+    """Feature matches between overlapping photos as (i, j, pixels_i, pixels_j), gated by the measured poses.
+    Photos are added one at a time, so the capture can match each new photo while the robot moves to the next one
+    (this is most of the stitching work; doing it during the capture hides it)."""
+
+    def __init__(self, cam: Camera, gate_deg: float = 10.0):
+        import cv2
+        self.cam, self.cos_gate = cam, math.cos(math.radians(gate_deg))
+        self.bf = cv2.BFMatcher(cv2.NORM_L2)
+        self.feats: list = []
+        self.rots: list[np.ndarray] = []
+        self.matches: list = []
+
+    def add(self, frame: Frame) -> None:
+        j = len(self.feats)
+        self.feats.append(_feature(frame.image))
+        self.rots.append(frame.R.copy())
+        for i in range(j):
+            if _overlap(self.rots[i], self.rots[j]):
+                m = self._pair(i, j)
+                if m is not None:
+                    self.matches.append(m)
+
+    def _pair(self, i: int, j: int):
+        (pi, di), (pj, dj) = self.feats[i], self.feats[j]
+        if di is None or dj is None or len(pi) < 8 or len(pj) < 8:
+            return None
+        knn = self.bf.knnMatch(di, dj, k=2)
+        good = [m[0] for m in knn if len(m) == 2 and m[0].distance < 0.8 * m[1].distance]
+        if len(good) < 8:
+            return None
+        a = pi[[m.queryIdx for m in good]]
+        b = pj[[m.trainIdx for m in good]]
+        wa = self.cam.rays(a) @ self.rots[i].T
+        wb = self.cam.rays(b) @ self.rots[j].T
+        keep = np.einsum("ij,ij->i", wa, wb) > self.cos_gate
+        if keep.sum() < 8:
+            return None
+        a, b, wa, wb = a[keep], b[keep], wa[keep], wb[keep]
+        # one relative rotation must explain the pair: RANSAC on world rays (Kabsch on 2-point samples)
+        best = None
+        rng = np.random.default_rng(i * 1000 + j)
+        for _ in range(60):
+            smp = rng.choice(len(wa), 2, replace=False)
+            U, _, Vt = np.linalg.svd(wb[smp].T @ wa[smp])
+            Rr = U @ np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))]) @ Vt
+            inl = np.linalg.norm(wa @ Rr.T - wb, axis=1) < math.radians(0.6)
+            if best is None or inl.sum() > best.sum():
+                best = inl
+        if best is None or best.sum() < 10:
+            return None
+        return i, j, a[best], b[best]
+
+
+def match_frames(cam: Camera, frames: list[Frame], gate_deg: float = 10.0):
+    """All matches for a finished set of photos (see Matcher)."""
+    m = Matcher(cam, gate_deg)
+    for f in frames:
+        m.add(f)
+    return m.matches
+
+
+def refine(cam: Camera, frames: list[Frame], matches, prior_deg: float = 3.0, match_deg: float = 0.3,
+           iters: int = 8) -> dict:
+    """Bundle adjustment of all photo orientations. Each photo gets a small world-frame correction w_i
+    (R_i <- exp(w_i) R_i0). Matched rays must agree (noise ~match_deg); each correction is held near zero with
+    ~prior_deg of slack (the measured poses are good to a few degrees), which fixes the gauge, keeps the horizon level
+    and leaves photos without matches (blank ceiling) at their measured pose. Gauss-Newton, outliers dropped as it
+    converges. The lens is calibrated (see DEFAULT_K), so only rotations are solved: fast and stable."""
+    n = len(frames)
+    if not matches:
+        return {"matches": 0, "pairs": 0, "rms_deg": None}
+    R0 = [f.R.copy() for f in frames]
+    obs = [(i, j, cam.rays(a), cam.rays(b)) for i, j, a, b in matches]
+    keep = [np.ones(len(ra), bool) for _, _, ra, _ in obs]
+    w = np.zeros((n, 3))
+    wd = 1.0 / math.radians(match_deg) ** 2
+    wp = 1.0 / math.radians(prior_deg) ** 2
+
+    def world(k_rot, i):
+        return expmap(w[i]) @ R0[i]
+
+    for it in range(iters):
+        Rs = [expmap(w[k]) @ R0[k] for k in range(n)]
+        A = np.eye(3 * n) * wp
+        g = wp * w.ravel().copy()
+        all_res = []
+        for (i, j, ra, rb), kp in zip(obs, keep):
+            va, vb = ra[kp] @ Rs[i].T, rb[kp] @ Rs[j].T
+            r = va - vb                                       # (m, 3)
+            all_res.append(np.linalg.norm(r, axis=1))
+            # d(exp(w) v)/dw = -[v]x  ->  J_i = -[va]x, J_j = +[vb]x ; sum over matches of J^T J and J^T r
+            Sa = np.einsum("mi,mj->ij", va, va); Sb = np.einsum("mi,mj->ij", vb, vb)
+            Sab = np.einsum("mi,mj->ij", va, vb)
+            m = len(va)
+            # [v]x^T [v]x = |v|^2 I - v v^T (|v| = 1)
+            A[3*i:3*i+3, 3*i:3*i+3] += wd * (m * np.eye(3) - Sa)
+            A[3*j:3*j+3, 3*j:3*j+3] += wd * (m * np.eye(3) - Sb)
+            # cross term: (-[va]x)^T [vb]x = [va]x [vb]x = vb va^T - (va.vb) I
+            cross = np.einsum("mi,mj->ij", vb, va) - np.einsum("mi,mi->", va, vb) * np.eye(3)
+            A[3*i:3*i+3, 3*j:3*j+3] += wd * cross
+            A[3*j:3*j+3, 3*i:3*i+3] += wd * cross.T
+            # J_i^T r = [va]x r = va x r ; J_j^T r = -[vb]x r = -(vb x r)
+            g[3*i:3*i+3] += wd * np.cross(va, r).sum(0)
+            g[3*j:3*j+3] -= wd * np.cross(vb, r).sum(0)
+        step = np.linalg.solve(A, -g).reshape(n, 3)
+        w = w + step
+        # drop outliers once the solution has settled a bit
+        if it >= 1:
+            Rs = [expmap(w[k]) @ R0[k] for k in range(n)]
+            res = np.concatenate([np.linalg.norm(ra @ Rs[i].T - rb @ Rs[j].T, axis=1) for i, j, ra, rb in obs])
+            thr = max(math.radians(1.0), 4 * float(np.median(res)))
+            ofs = 0
+            for k, (i, j, ra, rb) in enumerate(obs):
+                keep[k] = res[ofs:ofs + len(ra)] < thr
+                ofs += len(ra)
+        if np.abs(step).max() < 1e-6:
+            break
+    for k in range(n):
+        frames[k].R = expmap(w[k]) @ R0[k]
+    res = np.concatenate([np.linalg.norm(ra[kp] @ frames[i].R.T - rb[kp] @ frames[j].R.T, axis=1)
+                          for (i, j, ra, rb), kp in zip(obs, keep)])
+    return {"matches": int(len(res)), "pairs": len(matches), "rms_deg": float(np.degrees(np.sqrt(np.mean(res ** 2)))),
+            "median_deg": float(np.degrees(np.median(res))),
+            "max_correction_deg": float(np.degrees(np.linalg.norm(w, axis=1).max()))}
+
+
+# ----------------------------------------------------------------------------------------------- warping ---
+@dataclass
+class Warp:
+    image: np.ndarray        # BGR uint8, the frame's part of the canvas
+    mask: np.ndarray         # uint8 0/255
+    corner: tuple            # (x, y) top-left on the canvas
+    weight: np.ndarray = field(default=None, repr=False)
+
+
+def _frame_lon_lat_range(cam: Camera, R: np.ndarray, w: int, h: int):
+    """Equirect bbox (x0, x1, y0, y1) of a frame, x unwrapped around the frame's centre (may run past 0 / w)."""
+    x0b, x1b, y0b, y1b = cam.box
+    t = np.linspace(0, 1, 40)
+    nx = np.concatenate([x0b + (x1b - x0b) * t, np.full(40, x1b), x0b + (x1b - x0b) * t, np.full(40, x0b)])
+    ny = np.concatenate([np.full(40, y0b), y0b + (y1b - y0b) * t, np.full(40, y1b), y0b + (y1b - y0b) * t])
+    v = np.stack([nx, ny, np.ones_like(nx)], 1) @ R.T
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    lon, lat = np.arctan2(v[:, 1], v[:, 0]), np.arcsin(np.clip(v[:, 2], -1, 1))
+    c = R[:, 2]
+    lon_c = math.atan2(c[1], c[0])
+    pole = None
+    for z in (1.0, -1.0):                               # does the frame contain a pole?
+        pc = R.T @ np.array([0, 0, z])
+        if pc[2] > 0 and cam.inside(pc[0] / pc[2], pc[1] / pc[2]):
+            pole = z
+    if pole is not None:
+        ys = lat_to_y(lat, h)
+        return 0.0, float(w), (0.0 if pole > 0 else float(ys.min())), (float(h) if pole < 0 else float(ys.max())), True
+    dl = (lon - lon_c + math.pi) % (2 * math.pi) - math.pi
+    xs = lon_to_x(lon_c + dl, w)
+    ys = lat_to_y(lat, h)
+    return float(xs.min()), float(xs.max()), float(ys.min()), float(ys.max()), False
+
+
+def warp_frame(cam: Camera, image: np.ndarray, R: np.ndarray, w: int, h: int, pad: int, scale=(1.0, 1.0),
+               gains=None) -> list[Warp]:
+    """Project one photo onto the equirect canvas [-pad, w + pad) x [0, h). Returns 1-2 pieces (a copy shifted by
+    ±w when the photo crosses the canvas edge)."""
+    import cv2
+    x0, x1, y0, y1, full = _frame_lon_lat_range(cam, R, w, h)
+    y0, y1 = max(0, int(math.floor(y0)) - 2), min(h, int(math.ceil(y1)) + 3)
+    if full:
+        spans = [(-pad, w + pad)]
+    else:
+        a, b = int(math.floor(x0)) - 2, int(math.ceil(x1)) + 3
+        spans = []
+        for shift in (-w, 0, w):
+            s0, s1 = max(a + shift, -pad), min(b + shift, w + pad)
+            if s1 > s0:
+                spans.append((s0, s1))
+    img = image
+    if gains is not None:
+        img = np.clip(image.astype(np.float32) * np.asarray(gains, np.float32)[None, None, :], 0, 255).astype(np.uint8)
+    out = []
+    Rt = R.T.astype(np.float32)
+    for s0, s1 in spans:
+        xs = np.arange(s0, s1, dtype=np.float32)
+        ys = np.arange(y0, y1, dtype=np.float32)
+        lon = x_to_lon(xs, w).astype(np.float32)
+        lat = y_to_lat(ys, h).astype(np.float32)
+        cl, sl = np.cos(lat)[:, None], np.sin(lat)[:, None]
+        dx, dy, dz = cl * np.cos(lon)[None, :], cl * np.sin(lon)[None, :], np.broadcast_to(sl, (len(ys), len(xs)))
+        cx = Rt[0, 0] * dx + Rt[0, 1] * dy + Rt[0, 2] * dz
+        cy = Rt[1, 0] * dx + Rt[1, 1] * dy + Rt[1, 2] * dz
+        cz = Rt[2, 0] * dx + Rt[2, 1] * dy + Rt[2, 2] * dz
+        front = cz > 1e-3
+        czs = np.where(front, cz, 1.0)
+        nx, ny = cx / czs * scale[0], cy / czs * scale[1]
+        valid = front & cam.inside(nx, ny, 1e-3)
+        if not valid.any():
+            continue
+        mx, my = cam.normalised_to_pixel_maps(np.where(valid, nx, -10), np.where(valid, ny, -10))
+        valid &= (mx >= 0) & (mx <= cam.w - 1) & (my >= 0) & (my <= cam.h - 1)
+        rows, cols = np.where(valid)
+        if len(rows) == 0:
+            continue
+        r0, r1, c0, c1 = rows.min(), rows.max() + 1, cols.min(), cols.max() + 1
+        mx, my, valid = mx[r0:r1, c0:c1], my[r0:r1, c0:c1], valid[r0:r1, c0:c1]
+        piece = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        mask = valid.astype(np.uint8) * 255
+        mask = cv2.erode(mask, np.ones((3, 3), np.uint8))
+        # feather weight: distance from the photo's edge in the source image (vignetting-safe blending weight)
+        out.append(Warp(piece, mask, (int(s0 + c0), int(y0 + r0))))
+    return out
+
+
+# --------------------------------------------------------------------------------------- exposure matching ---
+def solve_gains(cam: Camera, frames: list[Frame], w: int = 512, sigma_n: float = 10.0, sigma_g: float = 0.1):
+    """Per-photo, per-channel gains (OpenCV GainCompensator's least squares, done per channel so it also evens out
+    white balance) from mean colours in pairwise overlaps on a small equirect."""
+    h = w // 2
+    small = [warp_frame(cam, cv2_resize_half(f.image), f.R, w, h, 0) for f in frames]
+    n = len(frames)
+    # rasterise each photo's pieces on the small canvas
+    imgs = np.zeros((n, h, w, 3), np.float32)
+    masks = np.zeros((n, h, w), bool)
+    for k, pieces in enumerate(small):
+        for p in pieces:
+            x, y = p.corner
+            ph, pw = p.mask.shape
+            sl = (slice(y, y + ph), slice(max(x, 0), min(x + pw, w)))
+            cx0 = max(x, 0) - x
+            cx1 = cx0 + (sl[1].stop - sl[1].start)
+            if cx1 <= cx0:
+                continue
+            m = p.mask[:, cx0:cx1] > 0
+            imgs[k][sl][m] = p.image[:, cx0:cx1][m]
+            masks[k][sl] |= m
+    gains = np.ones((n, 3))
+    for ch in range(3):
+        A = np.zeros((n, n))
+        b = np.zeros(n)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                ov = masks[i] & masks[j]
+                N = int(ov.sum())
+                if N < 50:
+                    continue
+                Ii = float(imgs[i][..., ch][ov].mean())
+                Ij = float(imgs[j][..., ch][ov].mean())
+                A[i, i] += N * (2 * Ii * Ii / sigma_n ** 2 + 1 / sigma_g ** 2)
+                A[i, j] -= N * 2 * Ii * Ij / sigma_n ** 2
+                b[i] += N / sigma_g ** 2
+        for i in range(n):
+            if A[i, i] == 0:
+                A[i, i], b[i] = 1.0, 1.0
+        gains[:, ch] = np.linalg.solve(A, b)
+    return np.clip(gains, 0.4, 2.5)
+
+
+def cv2_resize_half(img):
+    import cv2
+    return cv2.resize(img, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+
+
+# ---------------------------------------------------------------------------------------------- blending ---
+def blend(pieces: list[Warp], w: int, h: int, pad: int, seam_scale: float = 0.25, bands: int = 5):
+    """Graph-cut seams on a small copy, then multi-band blend. Returns (canvas BGR uint8 [h, w+2pad], mask)."""
+    import cv2
+    # seams on a reduced copy
+    sm_imgs, sm_masks, sm_corners = [], [], []
+    for p in pieces:
+        si = cv2.resize(p.image, None, fx=seam_scale, fy=seam_scale, interpolation=cv2.INTER_AREA)
+        sm = cv2.resize(p.mask, (si.shape[1], si.shape[0]), interpolation=cv2.INTER_NEAREST)
+        sm_imgs.append(si.astype(np.float32))
+        sm_masks.append(cv2.UMat(sm))
+        sm_corners.append((int(round((p.corner[0] + pad) * seam_scale)), int(round(p.corner[1] * seam_scale))))
+    try:
+        finder = cv2.detail_GraphCutSeamFinder("COST_COLOR_GRAD")
+        sm_masks = finder.find(sm_imgs, sm_corners, sm_masks)
+    except Exception as e:                       # very unlikely; fall back to plain overlaps (multi-band still hides)
+        log.warning("seam finder failed (%s); blending without seams", e)
+    blender = cv2.detail_MultiBandBlender(0, bands)
+    blender.prepare((0, 0, w + 2 * pad, h))
+    for p, sm in zip(pieces, sm_masks):
+        seam = cv2.resize(sm.get() if isinstance(sm, cv2.UMat) else sm, (p.mask.shape[1], p.mask.shape[0]),
+                          interpolation=cv2.INTER_LINEAR)
+        seam = cv2.dilate((seam > 127).astype(np.uint8) * 255, np.ones((3, 3), np.uint8))
+        m = cv2.bitwise_and(seam, p.mask)
+        blender.feed(p.image.astype(np.int16), m, (p.corner[0] + pad, p.corner[1]))
+    res, res_mask = blender.blend(None, None)
+    return np.clip(res, 0, 255).astype(np.uint8), res_mask
+
+
+def fold_wrap(canvas: np.ndarray, mask: np.ndarray, w: int, pad: int, k: int = 64):
+    """Cut the [-pad, w+pad) canvas to [0, w) and cross-fade the two renderings of the 360° seam."""
+    k = min(k, pad)
+    out = canvas[:, pad:pad + w].astype(np.float32)
+    om = mask[:, pad:pad + w].copy()
+    A = canvas[:, pad - k:pad + k].astype(np.float32)               # longitudes around the seam, left side
+    B = canvas[:, pad + w - k:pad + w + k].astype(np.float32)       # the same longitudes, right side
+    ma = mask[:, pad - k:pad + k] > 0
+    mb = mask[:, pad + w - k:pad + w + k] > 0
+    t = np.linspace(0, 1, 2 * k, dtype=np.float32)[None, :, None]
+    wa = t * ma[..., None]
+    wb = (1 - t) * mb[..., None]
+    M = (A * wa + B * wb) / np.maximum(wa + wb, 1e-6)
+    mm = ma | mb
+    out[:, w - k:] = M[:, :k]
+    out[:, :k] = M[:, k:]
+    om[:, w - k:] = mm[:, :k] * 255
+    om[:, :k] = mm[:, k:] * 255
+    return np.clip(out, 0, 255).astype(np.uint8), om
+
+
+# ------------------------------------------------------------------------------------------- pole filling ---
+def _pull_push(img: np.ndarray, known: np.ndarray) -> np.ndarray:
+    """Fill unknown pixels smoothly from known ones (masked image pyramid down, then up); known pixels are kept."""
+    import cv2
+    levels = []
+    cur, wgt = img.astype(np.float32) * known[..., None], known.astype(np.float32)
+    while min(cur.shape[:2]) > 4:
+        levels.append((cur, wgt))
+        cur = cv2.resize(cur, (cur.shape[1] // 2 or 1, cur.shape[0] // 2 or 1), interpolation=cv2.INTER_AREA) * 4
+        wgt = cv2.resize(wgt, (wgt.shape[1] // 2 or 1, wgt.shape[0] // 2 or 1), interpolation=cv2.INTER_AREA) * 4
+        cur = cv2.GaussianBlur(cur, (3, 3), 0)
+        wgt = cv2.GaussianBlur(wgt, (3, 3), 0)
+    fill = cur / np.maximum(wgt, 1e-6)[..., None]
+    for c, wg in reversed(levels):
+        up = cv2.resize(fill, (c.shape[1], c.shape[0]), interpolation=cv2.INTER_LINEAR)
+        up = cv2.GaussianBlur(up, (5, 5), 0)
+        a = np.clip(wg, 0, 1)[..., None]
+        fill = (c / np.maximum(wg, 1e-6)[..., None]) * a + up * (1 - a)
+    return fill
+
+
+def fill_poles(pano: np.ndarray, mask: np.ndarray, cap_deg: float = 60.0) -> tuple[np.ndarray, dict]:
+    """Fill what the robot could not see around the zenith and nadir, working in a top-down view of each cap so
+    the fill is round and smooth instead of smeared along the equirect rows."""
+    import cv2
+    h, w = mask.shape
+    out = pano.copy()
+    info = {}
+    known_all = mask > 0
+    for name, sign in (("zenith", 1), ("nadir", -1)):
+        R = int(round(cap_deg / 180 * h))                          # cap radius in polar-view pixels (equirect scale)
+        size = 2 * R + 1
+        u, v = np.meshgrid(np.arange(size) - R, np.arange(size) - R)
+        rho = np.sqrt(u.astype(np.float32) ** 2 + v.astype(np.float32) ** 2)           # pixels from the pole
+        theta = np.arctan2(v, u).astype(np.float32)
+        lat = sign * (math.pi / 2 - rho * (math.pi / h))
+        lon = theta * sign
+        mx = lon_to_x(lon, w).astype(np.float32) % w
+        my = lat_to_y(lat, h).astype(np.float32)
+        inside = rho <= R
+        polar = cv2.remap(pano, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+        pk = cv2.remap(known_all.astype(np.uint8) * 255, mx, my, cv2.INTER_NEAREST, borderMode=cv2.BORDER_WRAP) > 127
+        pk &= inside
+        hole = inside & ~pk
+        info[name] = {"missing_deg": float(np.degrees(np.sqrt(hole.sum() / math.pi) * math.pi / h)) if hole.any() else 0.0}
+        if not hole.any():
+            continue
+        filled = _pull_push(polar, pk | ~inside)
+        # map back: every equirect pixel in this cap that is a hole
+        ys = np.arange(h)
+        cap_rows = ys[(sign * y_to_lat(ys, h)) > math.radians(90 - cap_deg)]
+        if len(cap_rows) == 0:
+            continue
+        y0, y1 = int(cap_rows.min()), int(cap_rows.max()) + 1
+        lat_e = y_to_lat(np.arange(y0, y1), h)[:, None]
+        lon_e = x_to_lon(np.arange(w), w)[None, :]
+        rho_e = (math.pi / 2 - sign * lat_e) * (h / math.pi)
+        th_e = lon_e * sign
+        pu = (rho_e * np.cos(th_e) + R).astype(np.float32)
+        pv = (rho_e * np.sin(th_e) + R).astype(np.float32)
+        back = cv2.remap(np.clip(filled, 0, 255).astype(np.uint8), pu, pv, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        holes_e = ~known_all[y0:y1]
+        # soften the boundary a few pixels into the known area so the fill never shows a hard edge
+        soft = cv2.GaussianBlur(holes_e.astype(np.float32), (0, 0), 3)
+        soft = np.maximum(soft, holes_e.astype(np.float32))[..., None]
+        out[y0:y1] = (back * soft + out[y0:y1] * (1 - soft)).astype(np.uint8)
+    return out, info
+
+
+# ---------------------------------------------------------------------------------------------- metadata ---
+def gpano_xmp(w: int, h: int, photos: int) -> bytes:
+    return (
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description rdf:about="" xmlns:GPano="http://ns.google.com/photos/1.0/panorama/" '
+        'GPano:ProjectionType="equirectangular" GPano:UsePanoramaViewer="True" '
+        f'GPano:CroppedAreaImageWidthPixels="{w}" GPano:CroppedAreaImageHeightPixels="{h}" '
+        f'GPano:FullPanoWidthPixels="{w}" GPano:FullPanoHeightPixels="{h}" '
+        'GPano:CroppedAreaLeftPixels="0" GPano:CroppedAreaTopPixels="0" GPano:PoseHeadingDegrees="0" '
+        f'GPano:SourcePhotosCount="{photos}" GPano:CaptureSoftware="Reachy Gemini DJ"/>'
+        '</rdf:RDF></x:xmpmeta>').encode()
+
+
+def jpeg_with_xmp(jpeg: bytes, xmp: bytes) -> bytes:
+    """Insert an XMP APP1 segment after SOI (and after a JFIF APP0 if there is one)."""
+    if jpeg[:2] != b"\xff\xd8":
+        raise ValueError("not a JPEG")
+    body = b"http://ns.adobe.com/xap/1.0/\x00" + xmp
+    seg = b"\xff\xe1" + (len(body) + 2).to_bytes(2, "big") + body
+    pos = 2
+    if jpeg[2:4] == b"\xff\xe0":
+        pos = 4 + int.from_bytes(jpeg[4:6], "big")
+    return jpeg[:pos] + seg + jpeg[pos:]
+
+
+# --------------------------------------------------------------------------------------------- the stitch ---
+def stitch(frames: list[Frame], cam: Camera | None = None, out_w: int = OUT_W, progress=lambda f, s: None,
+           do_refine: bool = True, matches=None) -> tuple[np.ndarray, dict]:
+    """Photos -> equirectangular panorama. matches: from a Matcher fed during the capture (else matched here)."""
+    import cv2
+    t0 = time.monotonic()
+    cam = cam or Camera(size=(frames[0].image.shape[1], frames[0].image.shape[0]))
+    w, h = out_w, out_w // 2
+    pad = w // 8
+    info: dict = {"frames": len(frames)}
+    scale = (1.0, 1.0)
+    if do_refine and len(frames) > 1:
+        progress(0.05, "Matching photos")
+        if matches is None:
+            matches = match_frames(cam, frames)
+        progress(0.25, "Aligning")
+        info["align"] = refine(cam, frames, matches)
+    info["t_align"] = round(time.monotonic() - t0, 2)
+    progress(0.35, "Matching colours")
+    gains = solve_gains(cam, frames)
+    info["gains"] = np.round(gains, 3).tolist()
+    progress(0.45, "Projecting")
+    pieces: list[Warp] = []
+    for k, f in enumerate(frames):
+        pieces.extend(warp_frame(cam, f.image, f.R, w, h, pad, scale, gains[k]))
+    info["t_warp"] = round(time.monotonic() - t0, 2)
+    progress(0.6, "Blending")
+    canvas, cmask = blend(pieces, w, h, pad)
+    pano, pmask = fold_wrap(canvas, cmask, w, pad)
+    info["t_blend"] = round(time.monotonic() - t0, 2)
+    progress(0.9, "Filling the top and bottom")
+    pano, poles = fill_poles(pano, pmask)
+    info["poles"] = poles
+    info["coverage"] = round(float((pmask > 0).mean()), 4)
+    info["t_total"] = round(time.monotonic() - t0, 2)
+    return pano, info
+
+
+def coverage(shots: list[Shot], cam: Camera, w: int = 360) -> dict:
+    """Fraction of the sphere a plan sees with nominal poses (for planning; no images needed)."""
+    h = w // 2
+    lat = y_to_lat(np.arange(h), h)[:, None]
+    lon = x_to_lon(np.arange(w), w)[None, :]
+    dx, dy, dz = lonlat_to_dir(lon, lat)
+    dz = np.broadcast_to(dz, dx.shape)
+    seen = np.zeros((h, w), bool)
+    for s in shots:
+        R = rot_xyz(s.roll, s.pitch, s.yaw) @ expmap(MOUNT_ROTVEC) @ CAM_IN_HEAD
+        cx = R[0, 0] * dx + R[1, 0] * dy + R[2, 0] * dz
+        cy = R[0, 1] * dx + R[1, 1] * dy + R[2, 1] * dz
+        cz = R[0, 2] * dx + R[1, 2] * dy + R[2, 2] * dz
+        ok = cz > 1e-3
+        czs = np.where(ok, cz, 1)
+        seen |= ok & cam.inside(cx / czs, cy / czs)
+    area = np.cos(lat) * np.ones((1, w))
+    rows = seen.any(axis=1)
+    top = float(np.degrees(lat[rows.argmax(), 0])) if rows.any() else None
+    full_rows = seen.all(axis=1)
+    return {"sphere": float((seen * area).sum() / area.sum()),
+            "full_ring_up_to": float(np.degrees(lat[full_rows, 0].max())) if full_rows.any() else None,
+            "full_ring_down_to": float(np.degrees(lat[full_rows, 0].min())) if full_rows.any() else None,
+            "highest_seen": top}
+
+
+def encode(pano: np.ndarray, photos: int, quality: int = JPEG_QUALITY) -> tuple[bytes, bytes]:
+    """(full JPEG with GPano XMP, 640x320 thumbnail JPEG)."""
+    import cv2
+    h, w = pano.shape[:2]
+    ok, buf = cv2.imencode(".jpg", pano, [cv2.IMWRITE_JPEG_QUALITY, quality, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
+    if not ok:
+        raise RuntimeError("JPEG encoding failed")
+    thumb = cv2.resize(pano, (640, 320), interpolation=cv2.INTER_AREA)
+    ok2, tb = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    return jpeg_with_xmp(buf.tobytes(), gpano_xmp(w, h, photos)), tb.tobytes()
+
+
+# ------------------------------------------------------------------------------------------- the robot job ---
+ID_RE = __import__("re").compile(r"^\d{8}-\d{6}$")
+MOVE_DEG_PER_S = 110.0         # goto duration from the largest joint change (smooth min-jerk move, no blur on arrival)
+STILL_DEG = 0.06               # head counts as still when two pose reads 40 ms apart differ by less than this
+POINT_TOL_DEG = 2.5             # re-aim a shot when the head lands further than this from where it should look
+POINT_FIXES = 2                 # at most this many corrective nudges per shot
+HEAD_TURN_LIMIT = 20.0          # head yaw relative to the body, degrees (kept small: the neck cables)
+FRESH_FRAMES = 3               # frames to skip after the head stops (camera pipeline latency ~50-100 ms)
+
+
+class PanoramaJob:
+    """One capture + stitch at a time, run on a worker thread. The page polls status(); files land in store/."""
+
+    def __init__(self, get_mini, motion=None, store: Path | None = None, on_event=lambda kind, msg: None,
+                 motion_enabled=lambda: True):
+        from .config import HOME
+        self.get_mini, self.motion, self.on_event, self.motion_enabled = get_mini, motion, on_event, motion_enabled
+        self.store = Path(store or HOME / "panoramas")
+        self._lock = threading.Lock()
+        self._cancel = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._st = {"state": "idle", "progress": 0.0, "step": "", "id": None, "error": None, "eta_s": None}
+
+    # ------------------------------------------------------------------ API used by main.py / the voice tool
+    def status(self) -> dict:
+        with self._lock:
+            return dict(self._st)
+
+    def busy(self) -> bool:
+        return self.status()["state"] in ("capturing", "stitching")
+
+    def start(self, source: str = "page") -> dict:
+        with self._lock:
+            if self._st["state"] in ("capturing", "stitching"):
+                return {"ok": False, "error": "A 360° photo is already being taken."}
+            mini = self.get_mini()
+            if mini is None:
+                return {"ok": False, "error": "The robot is not connected yet."}
+            if not self.motion_enabled():
+                return {"ok": False, "error": "Movement is turned off in the settings."}
+            if self.motion is not None and getattr(self.motion, "learning", False):
+                return {"ok": False, "error": "Learn mode is on (motors relaxed). Turn it off first."}
+            pid = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._cancel.clear()
+            self._st = {"state": "capturing", "progress": 0.0, "step": "Getting ready", "id": pid, "error": None,
+                        "eta_s": None}
+        self._thread = threading.Thread(target=self._run, args=(pid, source), daemon=True, name="panorama")
+        self._thread.start()
+        return {"ok": True, "id": pid}
+
+    def cancel(self) -> dict:
+        self._cancel.set()
+        return {"ok": True}
+
+    def list(self) -> list[dict]:
+        items = []
+        if self.store.exists():
+            for meta in sorted(self.store.glob("*.json"), reverse=True):
+                try:
+                    m = json.loads(meta.read_text())
+                    pid = meta.stem
+                    if not ID_RE.match(pid) or not (self.store / f"{pid}.jpg").exists():
+                        continue
+                    items.append({"id": pid, "created": m.get("created"), "width": m.get("width"), "height": m.get("height"),
+                                  "frames": m.get("frames"), "seconds": m.get("seconds"),
+                                  "size_bytes": (self.store / f"{pid}.jpg").stat().st_size,
+                                  "url": f"/api/panorama/{pid}.jpg", "thumb_url": f"/api/panorama/{pid}/thumb.jpg"})
+                except Exception:
+                    continue
+        return items
+
+    def path(self, pid: str, thumb: bool = False) -> Path | None:
+        if not ID_RE.match(pid or ""):
+            return None
+        p = self.store / (f"{pid}_thumb.jpg" if thumb else f"{pid}.jpg")
+        return p if p.exists() else None
+
+    def delete(self, pid: str) -> bool:
+        if not ID_RE.match(pid or ""):
+            return False
+        found = False
+        for suffix in (".jpg", "_thumb.jpg", ".json"):
+            p = self.store / f"{pid}{suffix}"
+            if p.exists():
+                p.unlink()
+                found = True
+        return found
+
+    # ------------------------------------------------------------------ worker
+    def _set(self, **kw) -> None:
+        with self._lock:
+            self._st.update(kw)
+
+    def _run(self, pid: str, source: str) -> None:
+        t0 = time.monotonic()
+        held = False
+        frames: list[Frame] = []
+        try:
+            mini = self.get_mini()
+            if self.motion is not None and hasattr(self.motion, "hold_begin"):
+                self.motion.hold_begin("360 photo")
+                held = True
+            self.on_event("camera", f"Taking a 360° photo ({source})")
+            frames = self._capture(mini, t0)
+            if held:
+                self.motion.hold_end()
+                held = False
+            if self._cancel.is_set():
+                self._set(state="idle", step="Cancelled", progress=0.0, eta_s=None)
+                self.on_event("camera", "360° photo cancelled")
+                return
+            self._set(state="stitching", step="Stitching", progress=0.0, eta_s=None)
+            t1 = time.monotonic()
+            self._save_raw(frames)
+            self._set(step="Matching photos")
+            matches = self._capture_matches(len(frames))
+            pano, info = stitch(frames, progress=lambda f, s: self._set(progress=round(f, 3), step=s), matches=matches)
+            info["matched_during_capture"] = matches is not None
+            self._set(step="Saving", progress=0.97)
+            full, thumb = encode(pano, len(frames))
+            self.store.mkdir(parents=True, exist_ok=True)
+            (self.store / f"{pid}.jpg").write_bytes(full)
+            (self.store / f"{pid}_thumb.jpg").write_bytes(thumb)
+            meta = {"created": datetime.now().isoformat(timespec="seconds"), "width": pano.shape[1], "height": pano.shape[0],
+                    "frames": len(frames), "seconds": round(time.monotonic() - t0, 1),
+                    "capture_s": round(t1 - t0, 1), "stitch_s": round(time.monotonic() - t1, 1),
+                    "info": {k: v for k, v in info.items() if k != "gains"}}
+            (self.store / f"{pid}.json").write_text(json.dumps(meta, indent=1, default=float))
+            self._prune()
+            log.info("360 photo %s: %d photos, capture %.1f s, stitch %.1f s, align %s", pid, len(frames),
+                     meta["capture_s"], meta["stitch_s"], info.get("align"))
+            self.on_event("camera", f"360° photo saved ({len(frames)} photos, {meta['seconds']:.0f} s)")
+            self._set(state="done", step="Done", progress=1.0, eta_s=0)
+        except Exception as e:
+            log.exception("360 photo failed")
+            self._set(state="error", error=f"{type(e).__name__}: {e}"[:200], step="Failed", eta_s=None)
+            self.on_event("error", f"360° photo failed: {e}")
+        finally:
+            if held:
+                try:
+                    self.motion.hold_end()
+                except Exception:
+                    pass
+
+    def _save_raw(self, frames: list[Frame]) -> None:
+        """Keep the last capture's photos and poses (store/last_raw, replaced each time) so it can be re-stitched."""
+        import cv2
+        raw = self.store / "last_raw"
+        try:
+            shutil.rmtree(raw, ignore_errors=True)
+            raw.mkdir(parents=True)
+            for k, f in enumerate(frames):
+                cv2.imwrite(str(raw / f"{k:02d}.jpg"), f.image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+            (raw / "frames.json").write_text(json.dumps([{"i": k, "pose": np.asarray(f.pose).tolist()}
+                                                         for k, f in enumerate(frames)]))
+        except Exception as e:                       # never let this break the photo
+            log.warning("could not keep the raw photos: %s", e)
+
+    def _prune(self) -> None:
+        metas = sorted(self.store.glob("*.json"))
+        for m in metas[:-KEEP] if len(metas) > KEEP else []:
+            self.delete(m.stem)
+
+    # ------------------------------------------------------------------ capture
+    def _capture(self, mini, t0: float) -> list[Frame]:
+        from reachy_mini.utils import create_head_pose
+        shots = plan()
+        frames: list[Frame] = []
+        try:
+            mini.enable_motors()
+        except Exception as e:
+            log.warning("enable_motors: %s", e)
+        start_pose = np.asarray(mini.get_current_head_pose())
+        work = self._start_matcher()
+        try:
+            prev = Shot(0.0, 0.0)
+            per_shot = None
+            self._drain(mini)
+            for k, s in enumerate(shots):
+                if self._cancel.is_set():
+                    break
+                ts = time.monotonic()
+                change = max(abs(s.yaw - prev.yaw), abs(s.body - prev.body), abs(s.pitch - prev.pitch), abs(s.roll - prev.roll))
+                dur = max(0.3, change / MOVE_DEG_PER_S)
+                self._point(mini, s, dur, create_head_pose)
+                img = self._fresh_frame(mini)
+                if img is None:
+                    raise RuntimeError("The camera stopped sending pictures.")
+                frames.append(Frame(img, np.asarray(mini.get_current_head_pose(), dtype=np.float64)))
+                work.put(frames[-1])
+                prev = s
+                dt = time.monotonic() - ts
+                per_shot = dt if per_shot is None else 0.7 * per_shot + 0.3 * dt
+                left = len(shots) - k - 1
+                self._set(progress=round((k + 1) / len(shots), 3), step=f"Photo {k + 1} of {len(shots)}",
+                          eta_s=round(left * per_shot + 25, 0))
+        finally:
+            work.put(None)
+        # back to where it started (body centred)
+        try:
+            self._goto(mini, start_pose, 0.0, max(0.8, abs(prev.body) / MOVE_DEG_PER_S))
+        except Exception as e:
+            log.warning("could not return after the 360 photo: %s", e)
+        return frames
+
+    def _start_matcher(self) -> "queue.Queue":
+        """Background thread that matches each photo against the earlier ones while the robot moves on."""
+        work: queue.Queue = queue.Queue()
+        self._matcher, self._matcher_ok = None, threading.Event()
+
+        def run():
+            try:
+                while (f := work.get()) is not None:
+                    if self._matcher is None:
+                        self._matcher = Matcher(Camera(size=(f.image.shape[1], f.image.shape[0])))
+                    self._matcher.add(f)
+                self._matcher_ok.set()
+            except Exception:
+                log.exception("matching during the capture failed; it will be redone while stitching")
+                self._matcher = None
+                while work.get() is not None:   # drain so the capture never blocks
+                    pass
+
+        self._matcher_thread = threading.Thread(target=run, name="pano-match", daemon=True)
+        self._matcher_thread.start()
+        return work
+
+    def _capture_matches(self, n_frames: int):
+        """Matches made during the capture (waits for the last photo), or None to match while stitching."""
+        t = getattr(self, "_matcher_thread", None)
+        if t is None:
+            return None
+        t.join(timeout=120)
+        m = self._matcher
+        if not self._matcher_ok.is_set() or m is None or len(m.feats) != n_frames:
+            return None
+        return m.matches
+
+    def _point(self, mini, s: Shot, duration: float, create_head_pose) -> None:
+        """Move to a shot and make sure the head really got there. The head stops up to ~12 degrees short in pitch
+        (it lags in the direction it came from) and the body ~8-18 degrees short near +-160, but its own pose reading
+        agrees with the photos to ~3 degrees, so read it back and nudge the command until it is close."""
+        yaw, pitch, body = s.yaw, s.pitch, s.body
+        for attempt in range(1 + POINT_FIXES):
+            self._goto(mini, create_head_pose(roll=s.roll, pitch=pitch, yaw=yaw, degrees=True), math.radians(body),
+                       duration if attempt == 0 else 0.3)
+            self._wait_still(mini)
+            if attempt == POINT_FIXES:
+                return
+            my, mp, _ = head_ypr(mini.get_current_head_pose())
+            ey = (s.yaw - my + 180) % 360 - 180
+            ep = 0.0 if s.roll else s.pitch - mp         # rolled shots already sit at the edge of what IK allows
+            if abs(ey) < POINT_TOL_DEG and abs(ep) < POINT_TOL_DEG:
+                return
+            nb = max(-BODY_LIMIT, min(BODY_LIMIT, body + ey))
+            ny = max(nb - HEAD_TURN_LIMIT, min(nb + HEAD_TURN_LIMIT, yaw + ey))
+            npitch = max(-PITCH_LIMIT, min(PITCH_LIMIT, pitch + ep))
+            if max(abs(nb - body), abs(ny - yaw), abs(npitch - pitch)) < 0.5:
+                return                                   # already asking for the limit: this is as far as it goes
+            yaw, pitch, body = ny, npitch, nb
+
+    @staticmethod
+    def _goto(mini, head, body_yaw: float, duration: float) -> None:
+        for attempt in range(20):
+            try:
+                mini.goto_target(head=head, body_yaw=body_yaw, duration=duration)
+                return
+            except Exception as e:                      # MoveBusyError: another move is finishing
+                if "busy" not in str(e).lower() and "already running" not in str(e).lower():
+                    raise
+                time.sleep(0.1)
+        raise RuntimeError("The robot was busy with another move.")
+
+    @staticmethod
+    def _wait_still(mini, timeout: float = 1.5) -> None:
+        end = time.monotonic() + timeout
+        last = np.asarray(mini.get_current_head_pose())[:3, :3]
+        calm = 0
+        while time.monotonic() < end:
+            time.sleep(0.04)
+            cur = np.asarray(mini.get_current_head_pose())[:3, :3]
+            ang = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(cur @ last.T) - 1) / 2))))
+            last = cur
+            calm = calm + 1 if ang < STILL_DEG else 0
+            if calm >= 2:
+                return
+
+    @staticmethod
+    def _drain(mini) -> None:
+        for _ in range(10):
+            if mini.media.get_frame() is None:
+                return
+
+    @staticmethod
+    def _fresh_frame(mini, n: int = FRESH_FRAMES, timeout: float = 2.0):
+        """get_frame() returns None until a new frame arrives; skip n-1 new frames, return the n-th."""
+        got, f, end = 0, None, time.monotonic() + timeout
+        while got < n and time.monotonic() < end:
+            g = mini.media.get_frame()
+            if g is not None:
+                got, f = got + 1, g
+            else:
+                time.sleep(0.004)
+        return f

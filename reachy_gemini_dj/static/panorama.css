@@ -1,0 +1,69 @@
+/* Styles for the 360° photo card (Robot tab) and the fullscreen 360° viewer (panorama.js). Uses the shared --p-*
+   variables from settings.css; the viewer is always dark, like any photo viewer. */
+#rp-panorama .pano-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+#rp-panorama .pano-row .pn-btn.primary { min-width: 180px; }
+#rp-panorama [hidden] { display: none !important; }
+.pn-btn.quiet { background: transparent; border: 1px solid var(--p-border); color: var(--p-fg); }
+a.pn-btn { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+.pano-prog { margin: 0 0 12px; }
+.pano-bar { height: 8px; border-radius: 999px; background: var(--soft, var(--p-border)); overflow: hidden; }
+.pano-bar > i { display: block; height: 100%; width: 0; border-radius: 999px; background: var(--p-accent); transition: width .5s ease; }
+.pano-bar.indet > i { width: 35% !important; animation: pano-slide 1.2s ease-in-out infinite alternate; }
+@keyframes pano-slide { from { margin-left: 0; } to { margin-left: 65%; } }
+.pano-prog-text { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 8px; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pano-eta { font-weight: 400; }
+.pano-err { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; background: var(--badbg, transparent); color: var(--p-bad); border: 1px solid var(--p-bad); }
+
+.pano-count { display: inline-block; margin-left: 4px; padding: 0 8px; border-radius: 999px; background: var(--soft, var(--p-border)); color: var(--p-accent); font-size: 12px; }
+.pano-count:empty { display: none; }
+.pano-empty { margin: 4px 0 0 !important; padding: 16px 0; }
+.pano-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px 12px; }
+.pano-item { min-width: 0; }
+.pano-thumb { position: relative; display: block; width: 100%; aspect-ratio: 2 / 1; padding: 0; border: 1px solid var(--p-border); border-radius: 10px; overflow: hidden; background: var(--p-bg); cursor: pointer; }
+.pano-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .25s ease; }
+.pano-thumb:hover img { transform: scale(1.03); }
+.pano-thumb:focus-visible, .pv-btn:focus-visible, .pv-canvas:focus-visible { outline: 2px solid var(--p-accent, white); outline-offset: 2px; }
+.pano-badge { position: absolute; left: 8px; bottom: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; color: white; background: rgba(0,0,0,.55); }
+.pano-info { margin: 8px 0; }
+.pano-when { font-weight: 600; font-size: 14px; }
+.pano-meta { font-size: 13px; }
+.pano-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#rp-panorama .pano-actions .pn-btn { flex: 1 1 auto; }
+
+@media (max-width: 759.98px) {
+  .pano-grid { grid-template-columns: 1fr; gap: 20px; }
+  #rp-panorama .pano-row .pn-btn { flex: 1 1 100%; }
+}
+
+/* ---- viewer ---- */
+body.pv-open { overflow: hidden; }
+.pv { position: fixed; inset: 0; z-index: 1500; background: black; color: white; touch-action: none; overscroll-behavior: contain; }
+.pv-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; outline-offset: -3px; }
+.pv-canvas.grab { cursor: grabbing; }
+.pv-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 8px; padding: 12px 12px 24px; padding-top: max(12px, env(safe-area-inset-top));
+  background: linear-gradient(rgba(0,0,0,.6), transparent); pointer-events: none; }
+.pv-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+.pv-btn { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,.28);
+  background: rgba(20,22,30,.62); color: white; font: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; text-decoration: none; cursor: pointer;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); touch-action: manipulation; }
+.pv-btn:hover { background: rgba(50,54,70,.78); }
+.pv-close { background: rgba(255,255,255,.92); color: black; border-color: transparent; }
+.pv-close:hover { background: white; }
+.pv-status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px; background: rgba(20,22,30,.7); font-size: 14px; }
+.pv-status.err { background: rgba(120,20,20,.85); }
+.pv-spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,255,255,.3); border-top-color: white; animation: pv-rot .8s linear infinite; }
+.pv-status.err .pv-spin { display: none; }
+@keyframes pv-rot { to { transform: rotate(360deg); } }
+.pv-hint { position: absolute; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); max-width: calc(100% - 32px); padding: 8px 14px; border-radius: 999px;
+  background: rgba(20,22,30,.62); font-size: 13.5px; text-align: center; pointer-events: none; transition: opacity .6s ease; }
+.pv-hint.gone { opacity: 0; }
+.pv-flat { position: absolute; inset: 0; overflow-x: auto; overflow-y: hidden; display: flex; align-items: center; touch-action: pan-x; }
+.pv-flat img { height: min(100%, 50vw); max-width: none; display: block; }
+@media (max-width: 759.98px) {
+  .pv-btn { min-height: 44px; padding: 8px 12px; }
+  .pv-title { display: none; }
+  .pv-top { justify-content: flex-end; }
+}
+@media (prefers-reduced-motion: reduce) { .pano-bar > i, .pano-thumb img, .pv-hint { transition: none; } .pano-bar.indet > i, .pv-spin { animation: none; } }
+.pv [hidden] { display: none !important; }
