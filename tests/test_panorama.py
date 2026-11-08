@@ -197,3 +197,16 @@ def test_fold_wrap_keeps_size_and_blends_the_seam():
     mask = np.full((16, w + 2 * pad), 255, np.uint8)
     out, om = P.fold_wrap(canvas, mask, w, pad)
     assert out.shape == (16, w, 3) and out.dtype == np.uint8 and (out == 100).all() and (om == 255).all()
+
+
+def test_delete_removes_the_raw_photos_of_that_capture(tmp_path):
+    j = job(tmp_path)
+    for pid in ("20261108-000049", "20261108-000150"):
+        (tmp_path / f"{pid}.jpg").write_bytes(b"\xff\xd8x")
+        (tmp_path / f"{pid}_thumb.jpg").write_bytes(b"\xff\xd8t")
+        (tmp_path / f"{pid}.json").write_text(json.dumps({"created": "x", "frames": 40}))
+    j._save_raw([P.Frame(np.zeros((8, 8, 3), np.uint8), np.eye(4))], "20261108-000150")
+    assert (tmp_path / "last_raw" / "00.jpg").exists()
+    assert j.delete("20261108-000049") and (tmp_path / "last_raw").exists()      # an older photo: keep the latest raw
+    assert j.delete("20261108-000150") and not (tmp_path / "last_raw").exists()  # its own raw photos go with it
+    assert list(tmp_path.iterdir()) == []                                        # nothing left behind
