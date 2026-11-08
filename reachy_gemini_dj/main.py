@@ -667,7 +667,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
                               "Could not clear: " + ", ".join(res["cleared"][n]["label"] for n in res["faults"]))
             return {"ok": not res["faults"], **res}
 
-        # 360° photos. capture starts the robot turning (~40 photos, then a stitch on the robot); the page polls status.
+        # 360° photos. capture starts the robot turning (~34 photos, then a stitch on the robot); the page polls status.
         # Photos are kept on the robot in ~/.reachy_gemini_dj/panoramas (newest 30), as 2:1 JPEGs with GPano metadata.
         @app.post("/api/panorama/capture")
         def panorama_capture():

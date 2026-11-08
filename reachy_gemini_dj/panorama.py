@@ -48,10 +48,21 @@ CALIB_SIZE = (1280, 720)
 DEFAULT_K = np.array([[891.77, 0.0, 640.0], [0.0, 891.77, 360.0], [0.0, 0.0, 1.0]])
 DEFAULT_D = np.array([0.0017, 0.0982, 0.0, 0.0, 0.0])
 MOUNT_ROTVEC = np.array([-0.00285, 0.03769, -0.04313])     # radians, applied in the head frame
+# The 1280x720 stream is the middle 3072x1728 of the 4608x2592 sensor, binned 2x2 to 1536x864 and scaled to 1280:
+# so the focal length in full-resolution sensor pixels is 891.77 * 1536/1280 * 2. Other sizes derive from it.
+F_NATIVE = 891.77 * 1536 / 1280 * 2          # 2140.2 px
+SENSOR_SIZE = (4608, 2592)
+# Lens models per stream size (K, D). Full-FOV sizes see out to the corners of the wide lens, which the 720p
+# calibration never did, so they get their own calibration (CALIBRATIONS is filled in below).
+CALIBRATIONS: dict = {}
 
 BODY_LIMIT = 160.0            # official body yaw range, degrees
 PITCH_LIMIT = 40.0            # official head pitch / roll range
-OUT_W = 4096                  # equirect output width (the camera gives ~600 px/rad, i.e. ~3800 px around)
+OUT_W = 4096                  # fallback equirect output width; see pick_out_w
+OUT_W_STREAM = 5632           # the 1280x720 stream carries ~5600 px of detail around the sphere
+OUT_W_STEPS = (8192, 6144, 4096)   # full-resolution photos carry ~9000 px; the biggest one that fits in memory is used
+# Measured peak memory of stitch() + encode at these widths on 40 photos (MB over what the app already holds):
+# 6144 -> ~1150, 8192 -> ~1800. The blender's pyramids dominate and scale with the pixel count.
 JPEG_QUALITY = 90
 KEEP = 30                     # photos kept on the robot; the oldest are deleted beyond this
 
@@ -107,7 +118,14 @@ class Camera:
 
     def __init__(self, K=None, D=None, size=CALIB_SIZE):
         import cv2
-        if K is None:                      # the calibration, scaled if the stream is another size (same field of view)
+        if K is None and tuple(size) in CALIBRATIONS:
+            K, D0 = CALIBRATIONS[tuple(size)]
+            D = D0 if D is None else D
+        elif K is None and size[0] * SENSOR_SIZE[1] == size[1] * SENSOR_SIZE[0] and size[0] > 2000:
+            # full field of view (libcamera's full-resolution sensor mode, scaled): focal length from F_NATIVE
+            f = F_NATIVE * size[0] / SENSOR_SIZE[0]
+            K = np.array([[f, 0.0, size[0] / 2], [0.0, f, size[1] / 2], [0.0, 0.0, 1.0]])
+        elif K is None:                    # the 720p calibration, scaled if the stream is another size (same FOV)
             K = DEFAULT_K.copy()
             sx, sy = size[0] / CALIB_SIZE[0], size[1] / CALIB_SIZE[1]
             K[0] *= sx
@@ -140,7 +158,7 @@ class Camera:
         try:
             n = cv2.undistortPointsIter(p, self.K, self.D, None, None, crit)
         except AttributeError:
-            n = cv2.undistortPoints(p, self.K, self.D)
+            n = cv2.undistortPoints(p, self.K, self.D, criteria=crit)   # OpenCV 5: default is only 5 iterations
         return n.reshape(-1, 2)
 
     def rays(self, pix, scale=(1.0, 1.0)) -> np.ndarray:
@@ -194,24 +212,50 @@ class Shot:
         return max(-BODY_LIMIT, min(BODY_LIMIT, self.yaw))
 
 
+# Largest |roll| the head can take at a given pitch, from the robot's own inverse kinematics (the Rust solver in
+# reachy_mini_rust_kinematics 1.0.3 with the shipped kinematics_data.json: inverse_kinematics_safe, max body yaw 160,
+# max head-body yaw 65, forward kinematics read back), at head-body yaw 0 and 20 degrees (HEAD_TURN_LIMIT), worst of the
+# two roll directions, minus 3 degrees because the measured roll overshoots the command by 3-6 degrees. Pitch and roll
+# are not independent: at pitch -40 the solver stops at roll 33 (29 with the head turned 20 degrees from the body),
+# at pitch 40 it reaches the full 40. (Pitch beyond +-40 is solvable too, but +-40 is the official limit.)
+_ROLL_PITCH = [-40, -38, -36, -34, -32, -30, -20, 0, 40]
+_ROLL_REL0 = [30, 31, 32, 34, 36, 37, 37, 37, 37]
+_ROLL_REL20 = [26, 27, 29, 31, 32, 34, 37, 37, 36]
+
+
+def roll_limit(pitch: float, rel_yaw: float = 0.0) -> float:
+    """Reachable |roll| (degrees) at this pitch with the head turned rel_yaw degrees away from the body."""
+    f = min(1.0, abs(rel_yaw) / HEAD_TURN_LIMIT)
+    r0, r20 = np.interp(pitch, _ROLL_PITCH, _ROLL_REL0), np.interp(pitch, _ROLL_PITCH, _ROLL_REL20)
+    return float(r0 + (r20 - r0) * f)
+
+
 def _ring(n: int, pitch: float, offset: float = 0.0, roll: float = 0.0, alternate: bool = False) -> list[Shot]:
-    return [Shot(-180 + (i + offset) * 360 / n, pitch, (roll if i % 2 else -roll) if alternate else roll)
-            for i in range(n)]
+    """n shots evenly around the yaw circle; roll (signed) is clipped to what the head reaches at that pitch."""
+    out = []
+    for i in range(n):
+        yaw = -180 + (i + offset) * 360 / n
+        rel = yaw - max(-BODY_LIMIT, min(BODY_LIMIT, yaw))
+        r = math.copysign(min(abs(roll), roll_limit(pitch, rel)), roll)
+        out.append(Shot(yaw, pitch, (r if i % 2 else -r) if alternate else r))
+    return out
 
 
 def plan(level: str = "full") -> list[Shot]:
     """Shots in serpentine order (the body never swings back across the whole range mid-capture).
 
-    The camera sees ~70 x 42 degrees, so four rows 25 degrees apart overlap by ~17 degrees (enough to match features).
-    The head reaches pitch +-37 degrees; rolling it while looking up/down gains a few more degrees towards the poles
-    (the furthest combinations it really reaches: asking for more only makes the daemon clamp and log IK warnings).
-    full: 40 shots, ~85% of the sphere seen (everything from 57 below to 60 above the horizon); quick: 28 shots, ~84%."""
+    The camera sees ~94 x 62 degrees (87 x 56 inside the usable lens circle), so rows ~25 degrees apart overlap by half.
+    Pitch is limited to +-40 and the camera rolls about its own axis, so looking up/down the only way to see further
+    towards a pole is to roll the head: the top and bottom rows use the biggest roll the inverse kinematics solves
+    (roll_limit) and are dense, since every shot there reaches a bit further on one side.
+    full: 34 shots, 96 % of the sphere by area (everything from 69 degrees above to 76 below the horizon on every
+    meridian, a polar hole of ~18 / ~12 degrees radius that fill_poles completes); quick: 28 shots, ~95 %."""
     if level == "quick":
-        rows = [_ring(6, -PITCH_LIMIT), _ring(8, -12.5, .5), _ring(8, 12.5), _ring(6, PITCH_LIMIT, .5)]
+        rows = [_ring(8, -PITCH_LIMIT, .5, -31), _ring(6, -12, .25), _ring(6, 14, .75), _ring(8, PITCH_LIMIT, .25, 40)]
     else:
-        rows = [_ring(5, -34, .25, 28, True),                  # rolled, towards the zenith
-                _ring(7, -PITCH_LIMIT), _ring(8, -12.5, .5), _ring(8, 12.5), _ring(7, PITCH_LIMIT, .5),
-                _ring(5, 34.5, .25, 22, True)]                 # rolled, towards the nadir
+        rows = [_ring(9, -PITCH_LIMIT, .5, -31),               # rolled, towards the zenith
+                _ring(8, -12, .25), _ring(8, 14, .75),
+                _ring(9, PITCH_LIMIT, .25, 40)]                # rolled, towards the nadir
     out: list[Shot] = []
     for k, row in enumerate(rows):
         row = sorted(row, key=lambda s: s.yaw, reverse=bool(k % 2))
@@ -222,13 +266,31 @@ def plan(level: str = "full") -> list[Shot]:
 # --------------------------------------------------------------------------------------------- alignment ---
 @dataclass
 class Frame:
-    image: np.ndarray                   # BGR, as captured
+    image: np.ndarray | None            # BGR, as captured (None once compressed to jpeg to save memory)
     pose: np.ndarray                    # 4x4 measured head pose
     R: np.ndarray = None                # world-from-camera, refined
+    jpeg: bytes | None = None           # the photo, compressed (full-resolution captures keep only this)
+    size: tuple = None                  # (width, height)
 
     def __post_init__(self):
         if self.R is None:
             self.R = camera_rotation(self.pose)
+        if self.size is None and self.image is not None:
+            self.size = (self.image.shape[1], self.image.shape[0])
+
+    def load(self) -> np.ndarray:
+        """The photo as BGR (decoded from jpeg if it was compressed)."""
+        if self.image is not None:
+            return self.image
+        import cv2
+        return cv2.imdecode(np.frombuffer(self.jpeg, np.uint8), cv2.IMREAD_COLOR)
+
+    def compress(self, quality: int = 94) -> None:
+        import cv2
+        if self.image is not None:
+            ok, buf = cv2.imencode(".jpg", self.image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+            if ok:
+                self.jpeg, self.image = buf.tobytes(), None
 
 
 _CLAHE = None
@@ -267,7 +329,7 @@ class Matcher:
 
     def add(self, frame: Frame) -> None:
         j = len(self.feats)
-        self.feats.append(_feature(frame.image))
+        self.feats.append(_feature(frame.load()))
         self.rots.append(frame.R.copy())
         for i in range(j):
             if _overlap(self.rots[i], self.rots[j]):
@@ -470,7 +532,7 @@ def solve_gains(cam: Camera, frames: list[Frame], w: int = 512, sigma_n: float =
     """Per-photo, per-channel gains (OpenCV GainCompensator's least squares, done per channel so it also evens out
     white balance) from mean colours in pairwise overlaps on a small equirect."""
     h = w // 2
-    small = [warp_frame(cam, cv2_resize_half(f.image), f.R, w, h, 0) for f in frames]
+    small = [warp_frame(cam, cv2_resize_half(f.load()), f.R, w, h, 0) for f in frames]
     n = len(frames)
     # rasterise each photo's pieces on the small canvas
     imgs = np.zeros((n, h, w, 3), np.float32)
@@ -533,23 +595,59 @@ def blend(pieces: list[Warp], w: int, h: int, pad: int, seam_scale: float = 0.25
         sm_masks = finder.find(sm_imgs, sm_corners, sm_masks)
     except Exception as e:                       # very unlikely; fall back to plain overlaps (multi-band still hides)
         log.warning("seam finder failed (%s); blending without seams", e)
+    feed = seam_masks_full(pieces, sm_masks, sm_corners, seam_scale, w + 2 * pad, h, pad)
     blender = cv2.detail_MultiBandBlender(0, bands)
     blender.prepare((0, 0, w + 2 * pad, h))
+    for k, (p, m) in enumerate(zip(pieces, feed)):
+        blender.feed(p.image.astype(np.int16), m, (p.corner[0] + pad, p.corner[1]))
+        feed[k] = pieces[k].image = pieces[k].mask = None      # peak memory: the pieces are not needed after feeding
+    res, res_mask = blender.blend(None, None)
+    del blender
+    np.clip(res, 0, 255, out=res)
+    return res.astype(np.uint8), res_mask
+
+
+
+def seam_masks_full(pieces: list[Warp], sm_masks, sm_corners, seam_scale: float, cw: int, ch: int, pad: int):
+    """Full-resolution blend masks from the low-resolution graph-cut seams, with no gaps between neighbours.
+
+    The seams are found on a 1/4 copy whose piece corners were rounded to whole low-res pixels (up to +-2 full-res
+    pixels off) and whose sizes are not exactly 1/4 (resize rounding), so upscaling each piece's seam mask to its own
+    rectangle put neighbouring pieces' seam boundaries a few pixels apart. Pixels that no piece claimed got blend
+    weight 0, and MultiBandBlender paints weight-0 pixels black: the thin dark lines along seams. Here every piece
+    samples the low-res seam masks on the SAME canvas grid (so shared boundaries coincide), and any pixel some photo
+    sees but no seam mask claims is given to every photo that sees it."""
+    import cv2
+    s = seam_scale
+    out = []
+    claimed = np.zeros((ch, cw), np.uint8)
     for p, sm in zip(pieces, sm_masks):
-        seam = cv2.resize(sm.get() if isinstance(sm, cv2.UMat) else sm, (p.mask.shape[1], p.mask.shape[0]),
-                          interpolation=cv2.INTER_LINEAR)
+        sm = sm.get() if isinstance(sm, cv2.UMat) else sm
+        X0, Y0 = p.corner[0] + pad, p.corner[1]
+        ph, pw = p.mask.shape
+        lx, ly = sm_corners[len(out)]
+        # full-res canvas pixel X -> low-res canvas coord (X + .5) * s - .5 -> piece-local low-res coord minus lx
+        M = np.array([[s, 0, (X0 + 0.5) * s - 0.5 - lx], [0, s, (Y0 + 0.5) * s - 0.5 - ly]], np.float64)
+        seam = cv2.warpAffine(sm, M, (pw, ph), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+                              borderMode=cv2.BORDER_REPLICATE)
         seam = cv2.dilate((seam > 127).astype(np.uint8) * 255, np.ones((3, 3), np.uint8))
         m = cv2.bitwise_and(seam, p.mask)
-        blender.feed(p.image.astype(np.int16), m, (p.corner[0] + pad, p.corner[1]))
-    res, res_mask = blender.blend(None, None)
-    return np.clip(res, 0, 255).astype(np.uint8), res_mask
+        claimed[Y0:Y0 + ph, X0:X0 + pw] |= m
+        out.append(m)
+    for p, m in zip(pieces, out):           # pixels a photo sees that no seam mask claimed (seam ends, mask edges)
+        X0, Y0 = p.corner[0] + pad, p.corner[1]
+        ph, pw = p.mask.shape
+        orphan = cv2.bitwise_and(p.mask, cv2.bitwise_not(claimed[Y0:Y0 + ph, X0:X0 + pw]))
+        cv2.bitwise_or(m, orphan, dst=m)
+    return out
 
 
 def fold_wrap(canvas: np.ndarray, mask: np.ndarray, w: int, pad: int, k: int = 64):
-    """Cut the [-pad, w+pad) canvas to [0, w) and cross-fade the two renderings of the 360° seam."""
+    """Cut the [-pad, w+pad) canvas to [0, w) and cross-fade the two renderings of the 360° seam. Only the strips
+    around the seam go through float (the 8192-wide canvas would need 400 MB as float)."""
     k = min(k, pad)
-    out = canvas[:, pad:pad + w].astype(np.float32)
-    om = mask[:, pad:pad + w].copy()
+    out = np.ascontiguousarray(canvas[:, pad:pad + w])
+    om = np.ascontiguousarray(mask[:, pad:pad + w])
     A = canvas[:, pad - k:pad + k].astype(np.float32)               # longitudes around the seam, left side
     B = canvas[:, pad + w - k:pad + w + k].astype(np.float32)       # the same longitudes, right side
     ma = mask[:, pad - k:pad + k] > 0
@@ -557,13 +655,13 @@ def fold_wrap(canvas: np.ndarray, mask: np.ndarray, w: int, pad: int, k: int = 6
     t = np.linspace(0, 1, 2 * k, dtype=np.float32)[None, :, None]
     wa = t * ma[..., None]
     wb = (1 - t) * mb[..., None]
-    M = (A * wa + B * wb) / np.maximum(wa + wb, 1e-6)
+    M = np.clip((A * wa + B * wb) / np.maximum(wa + wb, 1e-6) + 0.5, 0, 255).astype(np.uint8)   # rounded, not truncated
     mm = ma | mb
     out[:, w - k:] = M[:, :k]
     out[:, :k] = M[:, k:]
     om[:, w - k:] = mm[:, :k] * 255
     om[:, :k] = mm[:, k:] * 255
-    return np.clip(out, 0, 255).astype(np.uint8), om
+    return out, om
 
 
 # ------------------------------------------------------------------------------------------- pole filling ---
@@ -585,6 +683,41 @@ def _pull_push(img: np.ndarray, known: np.ndarray) -> np.ndarray:
         a = np.clip(wg, 0, 1)[..., None]
         fill = (c / np.maximum(wg, 1e-6)[..., None]) * a + up * (1 - a)
     return fill
+
+
+def _add_texture(polar: np.ndarray, pk: np.ndarray, inside: np.ndarray, hole: np.ndarray, smooth: np.ndarray) -> np.ndarray:
+    """Give the smooth pole fill some structure: mirror the surroundings across the edge of the hole (along each ray
+    from the pole), keep only the mirror's detail (it minus its own blur, so no colour shift or seam) and fade it out
+    towards the middle of the hole, where there is nothing to continue. Lines of the ceiling or floor run on into the
+    hole and fold back, instead of ending in a flat blur."""
+    import cv2
+    size = polar.shape[0]
+    R = size // 2
+    nth = 720
+    th = np.linspace(-math.pi, math.pi, nth, endpoint=False).astype(np.float32)
+    rr = np.arange(R + 1, dtype=np.float32)
+    ru = (R + np.cos(th)[:, None] * rr[None]).astype(np.float32)
+    rv = (R + np.sin(th)[:, None] * rr[None]).astype(np.float32)
+    hs = cv2.remap(hole.astype(np.uint8) * 255, ru, rv, cv2.INTER_NEAREST) > 127
+    rb = np.where(hs.any(axis=1), R - np.argmax(hs[:, ::-1], axis=1), 0).astype(np.float32)   # last hole pixel per ray
+    k = 9
+    rb = np.convolve(np.concatenate([rb[-k:], rb, rb[:k]]), np.ones(2 * k + 1) / (2 * k + 1), mode="valid").astype(np.float32)
+    if rb.max() < 4:
+        return smooth
+    u, v = np.meshgrid(np.arange(size) - R, np.arange(size) - R)
+    rho = np.sqrt(u.astype(np.float32) ** 2 + v.astype(np.float32) ** 2)
+    ang = np.arctan2(v, u).astype(np.float32)
+    rbp = np.interp(ang, th, rb, period=2 * math.pi).astype(np.float32)
+    src = 2 * rbp - rho
+    su, sv = (R + np.cos(ang) * src).astype(np.float32), (R + np.sin(ang) * src).astype(np.float32)
+    ok = hole & (src < R - 1) & (cv2.remap(pk.astype(np.uint8) * 255, su, sv, cv2.INTER_NEAREST, borderValue=0) > 127)
+    mir = cv2.remap(np.clip(polar, 0, 255).astype(np.float32), su, sv, cv2.INTER_LINEAR)
+    mir = np.where(ok[..., None], mir, smooth)
+    sigma = max(3.0, float(rb[rb > 0].mean()) / 6)
+    detail = mir - cv2.GaussianBlur(mir, (0, 0), sigma)
+    w = np.clip(1.0 - (rbp - rho) / np.maximum(0.9 * rbp, 1.0), 0.0, 1.0) ** 0.7
+    w = cv2.GaussianBlur(w * ok, (0, 0), 2)
+    return smooth + detail * w[..., None]
 
 
 def fill_poles(pano: np.ndarray, mask: np.ndarray, cap_deg: float = 60.0) -> tuple[np.ndarray, dict]:
@@ -613,7 +746,7 @@ def fill_poles(pano: np.ndarray, mask: np.ndarray, cap_deg: float = 60.0) -> tup
         info[name] = {"missing_deg": float(np.degrees(np.sqrt(hole.sum() / math.pi) * math.pi / h)) if hole.any() else 0.0}
         if not hole.any():
             continue
-        filled = _pull_push(polar, pk | ~inside)
+        filled = _add_texture(polar, pk, inside, hole, _pull_push(polar, pk | ~inside))
         # map back: every equirect pixel in this cap that is a hole
         ys = np.arange(h)
         cap_rows = ys[(sign * y_to_lat(ys, h)) > math.radians(90 - cap_deg)]
@@ -633,6 +766,31 @@ def fill_poles(pano: np.ndarray, mask: np.ndarray, cap_deg: float = 60.0) -> tup
         soft = np.maximum(soft, holes_e.astype(np.float32))[..., None]
         out[y0:y1] = (back * soft + out[y0:y1] * (1 - soft)).astype(np.uint8)
     return out, info
+
+
+
+def fill_gaps(pano: np.ndarray, mask: np.ndarray, cap_deg: float = 60.0, margin: int = 32) -> tuple[np.ndarray, int]:
+    """Fill uncovered pixels outside the pole caps (fill_poles only works within cap_deg of the poles), e.g. a wedge
+    between two rows of photos that did not overlap. Smooth pull-push fill from the surroundings, wrap-aware, with a
+    soft edge; returns (pano, number of pixels filled)."""
+    import cv2
+    h, w = mask.shape
+    ys = np.arange(h)
+    band = np.abs(y_to_lat(ys, h)) <= math.radians(90 - cap_deg)
+    holes = (mask == 0) & band[:, None]
+    n = int(holes.sum())
+    if n == 0:
+        return pano, 0
+    rows = np.where(holes.any(axis=1))[0]
+    y0, y1 = max(0, int(rows.min()) - margin), min(h, int(rows.max()) + 1 + margin)
+    sub = cv2.copyMakeBorder(pano[y0:y1], 0, 0, margin, margin, cv2.BORDER_WRAP)
+    hs = cv2.copyMakeBorder(holes[y0:y1].astype(np.uint8), 0, 0, margin, margin, cv2.BORDER_WRAP) > 0
+    filled = np.clip(_pull_push(sub, ~hs), 0, 255)[:, margin:margin + w]
+    soft = cv2.GaussianBlur(holes[y0:y1].astype(np.float32), (0, 0), 3)
+    soft = np.maximum(soft, holes[y0:y1].astype(np.float32))[..., None]
+    out = pano.copy()
+    out[y0:y1] = (filled * soft + pano[y0:y1] * (1 - soft)).astype(np.uint8)
+    return out, n
 
 
 # ---------------------------------------------------------------------------------------------- metadata ---
@@ -661,15 +819,41 @@ def jpeg_with_xmp(jpeg: bytes, xmp: bytes) -> bytes:
 
 
 # --------------------------------------------------------------------------------------------- the stitch ---
-def stitch(frames: list[Frame], cam: Camera | None = None, out_w: int = OUT_W, progress=lambda f, s: None,
+def available_mb() -> float | None:
+    """Memory the system could give a new allocation (MB), or None when /proc/meminfo is unreadable."""
+    try:
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def pick_out_w(frame_w: int, avail_mb: float | None = None, margin_mb: float = 1000.0) -> int:
+    """Equirect width for the stitch: matched to the photos' detail, and no bigger than the memory allows (an
+    out-of-memory kill would take the robot's app with it). Needs the estimated peak plus margin_mb free."""
+    if frame_w < 2000:
+        return OUT_W_STREAM
+    avail = available_mb() if avail_mb is None else avail_mb
+    if avail is None:
+        return OUT_W_STEPS[1]
+    for w in OUT_W_STEPS:
+        if 450 + 2000 * (w / 8192) ** 2 + margin_mb <= avail:
+            return w
+    return OUT_W_STEPS[-1]
+
+
+def stitch(frames: list[Frame], cam: Camera | None = None, out_w: int | None = None, progress=lambda f, s: None,
            do_refine: bool = True, matches=None) -> tuple[np.ndarray, dict]:
     """Photos -> equirectangular panorama. matches: from a Matcher fed during the capture (else matched here)."""
     import cv2
     t0 = time.monotonic()
-    cam = cam or Camera(size=(frames[0].image.shape[1], frames[0].image.shape[0]))
+    cam = cam or Camera(size=frames[0].size)
+    out_w = out_w or pick_out_w(frames[0].size[0])
     w, h = out_w, out_w // 2
     pad = w // 8
-    info: dict = {"frames": len(frames)}
+    info: dict = {"frames": len(frames), "out_w": out_w}
     scale = (1.0, 1.0)
     if do_refine and len(frames) > 1:
         progress(0.05, "Matching photos")
@@ -684,15 +868,18 @@ def stitch(frames: list[Frame], cam: Camera | None = None, out_w: int = OUT_W, p
     progress(0.45, "Projecting")
     pieces: list[Warp] = []
     for k, f in enumerate(frames):
-        pieces.extend(warp_frame(cam, f.image, f.R, w, h, pad, scale, gains[k]))
+        pieces.extend(warp_frame(cam, f.load(), f.R, w, h, pad, scale, gains[k]))
     info["t_warp"] = round(time.monotonic() - t0, 2)
     progress(0.6, "Blending")
     canvas, cmask = blend(pieces, w, h, pad)
+    del pieces
     pano, pmask = fold_wrap(canvas, cmask, w, pad)
+    del canvas, cmask
     info["t_blend"] = round(time.monotonic() - t0, 2)
     progress(0.9, "Filling the top and bottom")
     pano, poles = fill_poles(pano, pmask)
     info["poles"] = poles
+    pano, info["gap_px"] = fill_gaps(pano, pmask)
     info["coverage"] = round(float((pmask > 0).mean()), 4)
     info["t_total"] = round(time.monotonic() - t0, 2)
     return pano, info
@@ -736,6 +923,142 @@ def encode(pano: np.ndarray, photos: int, quality: int = JPEG_QUALITY) -> tuple[
     return jpeg_with_xmp(buf.tobytes(), gpano_xmp(w, h, photos)), tb.tobytes()
 
 
+# ------------------------------------------------------------------------------------- full-resolution camera ---
+STILL_SIZE = (3072, 1728)       # libcamera picks the full-resolution 4608x2592 sensor mode: the lens's whole field of view
+STILL_FPS = 10
+# Continuous autofocus: in a room the robot sees things from 30 cm to several metres, and no single lens position is
+# sharp everywhere (measured: up to 4x sharper than any fixed focus in close-up directions). grab() waits for the
+# picture to settle (no motion blur, focus done) before it takes one.
+STILL_CONTROLS = "af-mode=continuous"
+STILL_MIN_FRESH = 3             # frames always skipped after the head stops (1-2 still show the end of the move)
+STILL_SETTLE_S = 1.5            # at most this long waiting for the sharpness to settle
+STILL_PLATEAU = 0.04            # settled = three frames in a row within 4 % sharpness of each other
+DAEMON_URL = "http://127.0.0.1:8000"
+
+
+class StillCamera:
+    """Full-resolution, full-field-of-view frames straight from libcamera.
+
+    The daemon's own stream is 1280x720 cut from the middle 2/3 of the sensor (Camera Module 3 Wide, IMX708). For the
+    photo sphere the app asks the daemon to release the camera (POST /api/media/release: live video pauses), opens
+    libcamera itself at STILL_SIZE, and always gives the camera back (POST /api/media/acquire) when done. Use as a
+    context manager; grab() returns a BGR frame exposed after the call (older buffered frames are skipped)."""
+
+    def __init__(self, mini, size=STILL_SIZE, fps: int = STILL_FPS, daemon: str = DAEMON_URL,
+                 controls: str = STILL_CONTROLS):
+        self.mini, self.size, self.fps, self.daemon, self.controls = mini, tuple(size), fps, daemon, controls
+        self.last = {}                               # how the last grab() went: frames, wait, sharpness
+        self.pipe = self.sink = None
+        self._released = self._reader_closed = False
+
+    def _post(self, action: str) -> None:
+        import urllib.request
+        req = urllib.request.Request(f"{self.daemon}/api/media/{action}", data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+
+    def __enter__(self) -> "StillCamera":
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst
+            Gst.init(None)
+            cam = getattr(getattr(self.mini, "media", None), "camera", None)
+            if cam is not None and hasattr(cam, "close"):
+                cam.close()                          # the app's IPC reader, before the daemon's socket goes away
+                self._reader_closed = True
+            self._post("release")
+            self._released = True
+            w, h = self.size
+            self.pipe = Gst.parse_launch(
+                f"libcamerasrc {self.controls} ! video/x-raw,width={w},height={h},framerate={self.fps}/1,format=NV12 ! "
+                "appsink name=sink drop=true max-buffers=1 sync=false")
+            self.pipe.set_state(Gst.State.PLAYING)
+            self.sink = self.pipe.get_by_name("sink")
+            end = time.monotonic() + 6.0             # first frame, then let auto exposure / white balance settle
+            got = 0
+            while got < 12 and time.monotonic() < end:
+                got += self._pull(1.0) is not None
+            if got == 0:
+                raise RuntimeError("no frames from the full-resolution camera")
+            return self
+        except Exception:
+            self.__exit__(None, None, None)
+            raise
+
+    def _pull(self, timeout_s: float):
+        """The next frame as NV12 (h*3/2, w) uint8, or None."""
+        from gi.repository import Gst
+        sample = self.sink.emit("try-pull-sample", int(timeout_s * 1e9))
+        if sample is None:
+            return None
+        w, h = self.size
+        buf = sample.get_buffer()
+        ok, info = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return None
+        try:
+            stride = len(info.data) * 2 // (3 * h)   # NV12 rows may be padded
+            return np.array(np.frombuffer(info.data, np.uint8)[: stride * h * 3 // 2].reshape(h * 3 // 2, stride)[:, :w])
+        finally:
+            buf.unmap(info)
+
+    @staticmethod
+    def sharpness(nv12, h: int) -> float:
+        """Laplacian variance of the luma at 1/4 scale: drops with motion blur and with defocus."""
+        import cv2
+        return float(cv2.Laplacian(nv12[:h:4, ::4], cv2.CV_32F).var())
+
+    def grab(self, min_fresh: int = STILL_MIN_FRESH, settle_s: float = STILL_SETTLE_S, timeout_s: float = 3.0):
+        """A BGR frame taken after the head stopped: skips min_fresh frames, then waits (up to settle_s) until the
+        sharpness stops changing (motion blur gone, autofocus done) and returns the sharpest of the settled frames."""
+        import cv2
+        h = self.size[1]
+        t0 = time.monotonic()
+        for _ in range(max(1, min_fresh)):
+            f = self._pull(timeout_s)
+            if f is None:
+                return None
+        hist = [(self.sharpness(f, h), f)]
+        while time.monotonic() - t0 < settle_s:
+            vals = [v for v, _ in hist[-3:]]
+            if len(vals) == 3 and max(vals) - min(vals) <= STILL_PLATEAU * max(vals):
+                break
+            f = self._pull(timeout_s)
+            if f is None:
+                break
+            hist.append((self.sharpness(f, h), f))
+        best_v, best = max(hist[-3:], key=lambda t: t[0])
+        self.last = {"frames": min_fresh + len(hist) - 1, "wait_s": round(time.monotonic() - t0, 2),
+                     "sharpness": round(best_v, 1)}
+        return cv2.cvtColor(best, cv2.COLOR_YUV2BGR_NV12)
+
+    def __exit__(self, *exc) -> None:
+        if self.pipe is not None:
+            try:
+                from gi.repository import Gst
+                self.pipe.set_state(Gst.State.NULL)
+            except Exception as e:
+                log.warning("stopping the full-resolution camera: %s", e)
+            self.pipe = self.sink = None
+        if self._released:
+            for attempt in range(3):
+                try:
+                    self._post("acquire")
+                    break
+                except Exception as e:
+                    log.warning("giving the camera back to the daemon failed (%s), retrying", e)
+                    time.sleep(1.0)
+            self._released = False
+            time.sleep(1.0)                          # the daemon's IPC socket comes back with its pipeline
+        if self._reader_closed:
+            try:
+                self.mini.media.camera.open()
+            except Exception as e:
+                log.warning("reopening the app's camera reader: %s", e)
+            self._reader_closed = False
+
+
 # ------------------------------------------------------------------------------------------- the robot job ---
 ID_RE = __import__("re").compile(r"^\d{8}-\d{6}$")
 MOVE_DEG_PER_S = 110.0         # goto duration from the largest joint change (smooth min-jerk move, no blur on arrival)
@@ -758,6 +1081,9 @@ class PanoramaJob:
         self._cancel = threading.Event()
         self._thread: threading.Thread | None = None
         self._st = {"state": "idle", "progress": 0.0, "step": "", "id": None, "error": None, "eta_s": None}
+        self.full_res = True             # full sensor via the daemon's media release (live video pauses meanwhile)
+        self.source = "stream"
+        self.grabs: list[dict] = []
 
     # ------------------------------------------------------------------ API used by main.py / the voice tool
     def status(self) -> dict:
@@ -849,9 +1175,9 @@ class PanoramaJob:
                 return
             self._set(state="stitching", step="Stitching", progress=0.0, eta_s=None)
             t1 = time.monotonic()
-            self._save_raw(frames)
             self._set(step="Matching photos")
             matches = self._capture_matches(len(frames))
+            self._save_raw(frames)
             pano, info = stitch(frames, progress=lambda f, s: self._set(progress=round(f, 3), step=s), matches=matches)
             info["matched_during_capture"] = matches is not None
             self._set(step="Saving", progress=0.97)
@@ -860,9 +1186,13 @@ class PanoramaJob:
             (self.store / f"{pid}.jpg").write_bytes(full)
             (self.store / f"{pid}_thumb.jpg").write_bytes(thumb)
             meta = {"created": datetime.now().isoformat(timespec="seconds"), "width": pano.shape[1], "height": pano.shape[0],
-                    "frames": len(frames), "seconds": round(time.monotonic() - t0, 1),
+                    "frames": len(frames), "source": self.source, "seconds": round(time.monotonic() - t0, 1),
                     "capture_s": round(t1 - t0, 1), "stitch_s": round(time.monotonic() - t1, 1),
                     "info": {k: v for k, v in info.items() if k != "gains"}}
+            if self.grabs:
+                meta["grabs"] = {"wait_s_mean": round(float(np.mean([g["wait_s"] for g in self.grabs])), 2),
+                                 "sharpness_min": min(g["sharpness"] for g in self.grabs),
+                                 "sharpness_median": float(np.median([g["sharpness"] for g in self.grabs]))}
             (self.store / f"{pid}.json").write_text(json.dumps(meta, indent=1, default=float))
             self._prune()
             log.info("360 photo %s: %d photos, capture %.1f s, stitch %.1f s, align %s", pid, len(frames),
@@ -888,7 +1218,10 @@ class PanoramaJob:
             shutil.rmtree(raw, ignore_errors=True)
             raw.mkdir(parents=True)
             for k, f in enumerate(frames):
-                cv2.imwrite(str(raw / f"{k:02d}.jpg"), f.image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                if f.jpeg is not None:
+                    (raw / f"{k:02d}.jpg").write_bytes(f.jpeg)
+                else:
+                    cv2.imwrite(str(raw / f"{k:02d}.jpg"), f.image, [cv2.IMWRITE_JPEG_QUALITY, 92])
             (raw / "frames.json").write_text(json.dumps([{"i": k, "pose": np.asarray(f.pose).tolist()}
                                                          for k, f in enumerate(frames)]))
         except Exception as e:                       # never let this break the photo
@@ -910,6 +1243,17 @@ class PanoramaJob:
             log.warning("enable_motors: %s", e)
         start_pose = np.asarray(mini.get_current_head_pose())
         work = self._start_matcher()
+        still = None
+        if self.full_res:
+            self._set(step="Getting the camera")
+            try:
+                still = StillCamera(mini).__enter__()
+            except Exception as e:
+                log.warning("full-resolution camera unavailable (%s); using the video stream", e)
+                still = None
+        self.source = f"{STILL_SIZE[0]}x{STILL_SIZE[1]}" if still else "stream"
+        grabs: list[dict] = []
+        self.grabs = grabs
         try:
             prev = Shot(0.0, 0.0)
             per_shot = None
@@ -921,10 +1265,12 @@ class PanoramaJob:
                 change = max(abs(s.yaw - prev.yaw), abs(s.body - prev.body), abs(s.pitch - prev.pitch), abs(s.roll - prev.roll))
                 dur = max(0.3, change / MOVE_DEG_PER_S)
                 self._point(mini, s, dur, create_head_pose)
-                img = self._fresh_frame(mini)
+                img = still.grab() if still else self._fresh_frame(mini)
                 if img is None:
                     raise RuntimeError("The camera stopped sending pictures.")
                 frames.append(Frame(img, np.asarray(mini.get_current_head_pose(), dtype=np.float64)))
+                if still is not None:
+                    grabs.append(still.last)
                 work.put(frames[-1])
                 prev = s
                 dt = time.monotonic() - ts
@@ -934,6 +1280,8 @@ class PanoramaJob:
                           eta_s=round(left * per_shot + 25, 0))
         finally:
             work.put(None)
+            if still is not None:
+                still.__exit__(None, None, None)     # live video comes back
         # back to where it started (body centred)
         try:
             self._goto(mini, start_pose, 0.0, max(0.8, abs(prev.body) / MOVE_DEG_PER_S))
@@ -950,8 +1298,10 @@ class PanoramaJob:
             try:
                 while (f := work.get()) is not None:
                     if self._matcher is None:
-                        self._matcher = Matcher(Camera(size=(f.image.shape[1], f.image.shape[0])))
+                        self._matcher = Matcher(Camera(size=f.size))
                     self._matcher.add(f)
+                    if f.size[0] > 2000:                 # full-resolution photo: keep it compressed (40 x 16 MB)
+                        f.compress()
                 self._matcher_ok.set()
             except Exception:
                 log.exception("matching during the capture failed; it will be redone while stitching")
