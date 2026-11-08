@@ -5,7 +5,7 @@ colorFrom: indigo
 colorTo: purple
 sdk: static
 pinned: false
-short_description: Voice DJ and helper for Reachy Mini with a free local voice
+short_description: Voice DJ, 360 photos and helper for Reachy Mini, free local voice
 tags:
   - reachy_mini_python_app
 ---
@@ -37,6 +37,10 @@ questions.
   Limits follow Pollen's documented ranges (head pitch/roll ±40°, head yaw ±180°, body ±160°, head within 65° of the
   body). The **Motor health** card on the Robot tab shows motor errors and clears an overload without a power cycle.
 - **Camera.** Ask "what do you see?" and the local vision model describes what is in front of Reachy.
+- **360° photos.** Say "take a 360 photo" (or press **Take 360° photo** on the Robot tab). Reachy turns all the way
+  around, takes sharp full-resolution photos, and stitches one 360° picture on the robot, up to 6144 px wide. You
+  choose how many photos to take, from a 2-minute preview to an 80-photo slow mode
+  ([details below](#360-photos)).
 - **Weather and web search.** Both are free (Open-Meteo and DuckDuckGo) and need no keys.
 - **FRC helper.** Scan your team's FRC Nexus QR code, hear queuing alerts, and look up any team's history and
   results ([below](#frc-robotics-helper-nexus--the-blue-alliance)).
@@ -53,6 +57,41 @@ questions.
   music and for Reachy's voice, and works on phones.
 
 ---
+
+## 360° photos
+
+Reachy turns on the spot, looks up, level and down, and stitches the photos into one 360° picture (an equirectangular
+JPEG with Google "GPano" metadata, so photo viewers treat it as a photo sphere). Pictures show up in the **Robot** tab:
+a gallery, a full-screen viewer you can drag around, **Download** and **Delete**.
+
+**Start one:** press **Take 360° photo** on the Robot tab, or say "take a 360 photo". Pick a mode first, or say it:
+"take a fast 360 photo", "take the best-quality one".
+
+| Mode | Photos | About how long (estimate) | Use it for |
+|---|---|---|---|
+| Ultra fast | 15 | 2 min | a quick preview; seams and steps are likely |
+| Fast | 25 | 3 min | most rooms |
+| Regular (default) | 42 | 5 min | everyday use |
+| Slow | 60 | 7 min | smaller seam steps on near objects |
+| Ultra slow | 80 | 7 min | the cleanest result; the picture is 4096 px wide to fit in memory |
+
+More photos give a cleaner result because neighbouring photos are taken closer together. Times are for the robot's
+stitching; the capture part is about 2.5 s a photo.
+
+**Good to know**
+- **Put Reachy on a flat surface** and step out of the picture. The robot turns its whole body, so keep the area clear.
+- **Live video pauses** while the photos are taken: the app asks the robot for exclusive use of the camera, then gives
+  it back.
+- Photos are taken at full resolution with the camera's whole field of view, with autofocus. Reachy waits for each
+  picture to be sharp before it takes it.
+- Everything stays on the robot, in `~/.reachy_gemini_dj/panoramas`. The newest 30 pictures are kept. **Delete** removes
+  a picture, its thumbnail and its raw photos.
+- The picture size adapts to the robot's free memory (8192, 6144 or 4096 px wide).
+- Movements stay inside Pollen's documented limits, a little under the edge so the head does not press against it.
+
+**Known limits.** Near objects (a floor, a mattress edge) can show small steps in the seams, because the camera sits a
+few centimetres from the head's turning point. More photos make the steps smaller, not zero. The very top and bottom
+of the sphere are filled in smoothly, because the head cannot look straight up or down.
 
 ## Install on the robot
 
