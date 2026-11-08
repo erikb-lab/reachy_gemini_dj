@@ -1,3 +1,3 @@
 """Reachy Gemini DJ package."""
-__version__ = "0.8.55"
+__version__ = "0.8.56"
 
