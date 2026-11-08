@@ -235,3 +235,20 @@ def test_every_mode_is_reachable_and_overlaps_enough():
 def test_pick_out_w_shrinks_for_many_photos():
     assert P.pick_out_w(3072, avail_mb=3000, n_frames=40) == 6144
     assert P.pick_out_w(3072, avail_mb=3000, n_frames=120) == 4096
+
+
+def test_goto_retries_a_motor_glitch_and_gives_up_on_a_dead_link():
+    class Flaky:
+        def __init__(self, fails): self.fails, self.calls = fails, 0
+        def goto_target(self, head, body_yaw, duration):
+            self.calls += 1
+            if self.calls <= self.fails:
+                raise RuntimeError("Task failed with error: Motor communication error! Check connections")
+    import time as _t
+    real, _t.sleep = _t.sleep, lambda s: None
+    try:
+        m = Flaky(2); P.PanoramaJob._goto(m, np.eye(4), 0.0, 0.5); assert m.calls == 3
+        with pytest.raises(RuntimeError):
+            P.PanoramaJob._goto(Flaky(99), np.eye(4), 0.0, 0.5)
+    finally:
+        _t.sleep = real

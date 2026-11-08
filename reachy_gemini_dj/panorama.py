@@ -1412,6 +1412,9 @@ class PanoramaJob:
                 elif "out of range" in msg and attempt < 3:          # the daemon stalled mid-move (e.g. its relay
                     log.warning("move failed (%s); trying it again", e)   # reconnecting): a retry is a fresh move
                     time.sleep(0.4)
+                elif "communication error" in msg and attempt < 4:   # a brief serial glitch to one motor: the link
+                    log.warning("move failed (%s); trying it again", e)   # recovers by itself within a second or two
+                    time.sleep(1.5)
                 else:
                     raise
         raise RuntimeError("The robot was busy with another move.")
