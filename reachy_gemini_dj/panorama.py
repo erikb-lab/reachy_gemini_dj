@@ -215,12 +215,13 @@ class Shot:
 # Largest |roll| the head can take at a given pitch, from the robot's own inverse kinematics (the Rust solver in
 # reachy_mini_rust_kinematics 1.0.3 with the shipped kinematics_data.json: inverse_kinematics_safe, max body yaw 160,
 # max head-body yaw 65, forward kinematics read back), at head-body yaw 0 and 20 degrees (HEAD_TURN_LIMIT), worst of the
-# two roll directions, minus 3 degrees because the measured roll overshoots the command by 3-6 degrees. Pitch and roll
+# two roll directions, minus 9 degrees: the measured roll overshoots the command by 3-6 degrees, and asking for the
+# very edge made the head press against its limit (IK warnings, motor strain), so keep clear of it. Pitch and roll
 # are not independent: at pitch -40 the solver stops at roll 33 (29 with the head turned 20 degrees from the body),
 # at pitch 40 it reaches the full 40. (Pitch beyond +-40 is solvable too, but +-40 is the official limit.)
 _ROLL_PITCH = [-40, -38, -36, -34, -32, -30, -20, 0, 40]
-_ROLL_REL0 = [30, 31, 32, 34, 36, 37, 37, 37, 37]
-_ROLL_REL20 = [26, 27, 29, 31, 32, 34, 37, 37, 36]
+_ROLL_REL0 = [24, 25, 26, 28, 30, 31, 31, 31, 31]
+_ROLL_REL20 = [20, 21, 23, 25, 26, 28, 31, 31, 30]
 
 
 def roll_limit(pitch: float, rel_yaw: float = 0.0) -> float:
@@ -245,19 +246,20 @@ def _ring(n: int, pitch: float, offset: float = 0.0, roll: float = 0.0, alternat
 # steps where near things shift between neighbouring photos (the camera is 4-5 cm off the head's rotation centre) and
 # better overlap for alignment, at about 2 s of capture and 3.5 s of stitching per photo. Coverage (share of the
 # sphere seen at least once / at least twice), measured with the full-field-of-view camera:
-#   ultra_fast 15: 96 % / 53 %   fast 25: 96 % / 89 %   regular 42: 96 % / 95 %   slow 60 and ultra_slow 80: 96 % / 96 %
-_UP, _DOWN = -PITCH_LIMIT, PITCH_LIMIT
+#   ultra_fast 15: 93 % / 50 %   fast 25: 93 % / 85 %   regular 42: 93 % / 91 %   slow 60 and ultra_slow 80: 93 % / 92 %
+# (the top and bottom rows keep clear of the head's limits: pitch 36 and roll 24 / 30, a little less than it can do)
+_UP, _DOWN = -36.0, 36.0           # the rolled rows stay 4 degrees inside the pitch limit, away from its edge
 MODES: dict[str, dict] = {
     "ultra_fast": {"label": "Ultra fast", "note": "preview: little overlap, steps and soft seams likely",
-                   "rows": [(5, _UP, .5, -31), (5, 0, .25), (5, _DOWN, .25, 40)]},
+                   "rows": [(5, _UP, .5, -24), (5, 0, .25), (5, _DOWN, .25, 30)]},
     "fast": {"label": "Fast", "note": "good for most rooms",
-             "rows": [(6, _UP, .5, -31), (6, -12, .25), (6, 14, .75), (7, _DOWN, .25, 40)]},
+             "rows": [(6, _UP, .5, -24), (6, -12, .25), (6, 14, .75), (7, _DOWN, .25, 30)]},
     "regular": {"label": "Regular", "note": "the default",
-                "rows": [(9, _UP, .5, -31), (12, -12, .25), (12, 14, .75), (9, _DOWN, .25, 40)]},
+                "rows": [(9, _UP, .5, -24), (12, -12, .25), (12, 14, .75), (9, _DOWN, .25, 30)]},
     "slow": {"label": "Slow", "note": "smaller steps on near objects",
-             "rows": [(10, _UP, .5, -31), (12, -26, .25), (14, -4, .75), (14, 18, .25), (10, _DOWN, .5, 40)]},
+             "rows": [(10, _UP, .5, -24), (12, -26, .25), (14, -4, .75), (14, 18, .25), (10, _DOWN, .5, 30)]},
     "ultra_slow": {"label": "Ultra slow", "note": "smallest steps; the stitch may use a smaller picture size on the robot",
-                   "rows": [(12, _UP, .5, -31), (14, -30, .25), (14, -14, .75), (14, 2, .25), (14, 18, .75), (12, _DOWN, .25, 40)]},
+                   "rows": [(12, _UP, .5, -24), (14, -30, .25), (14, -14, .75), (14, 2, .25), (14, 18, .75), (12, _DOWN, .25, 30)]},
 }
 DEFAULT_MODE = "regular"
 MODE_ALIASES = {"full": "regular", "quick": "fast"}
@@ -268,9 +270,9 @@ def mode_shots(mode: str) -> int:
 
 
 def mode_estimate_s(mode: str) -> int:
-    """Rough total seconds on the robot (capture ~2.1 s and stitch ~3.6 s per photo, plus start and finish)."""
+    """Rough total seconds on the robot (capture ~2.6 s and stitch ~3.6 s per photo, plus start and finish)."""
     n = mode_shots(mode)
-    return int(round(2.1 * n + 3.6 * n + 30, -1))
+    return int(round(2.6 * n + 3.6 * n + 30, -1))
 
 
 def modes_listing() -> list[dict]:
@@ -284,8 +286,8 @@ def plan(level: str = DEFAULT_MODE) -> list[Shot]:
     The camera sees ~94 x 62 degrees (87 x 56 inside the usable lens circle), so rows ~25 degrees apart overlap by half.
     Pitch is limited to +-40 and the camera rolls about its own axis, so looking up/down the only way to see further
     towards a pole is to roll the head: the top and bottom rows use the biggest roll the inverse kinematics solves
-    (roll_limit), since every shot there reaches a bit further on one side. All modes see ~96 % of the sphere by area
-    (everything from ~70 degrees above to ~77 below the horizon, a polar hole fill_poles completes). `level` is a key of
+    (roll_limit), since every shot there reaches a bit further on one side. All modes see ~93 % of the sphere by area
+    (everything from ~64 degrees above to ~70 below the horizon, a polar hole fill_poles completes). `level` is a key of
     MODES ("full" and "quick" still work as "regular" and "fast")."""
     level = MODE_ALIASES.get(level, level)
     if level not in MODES:
@@ -1096,7 +1098,8 @@ class StillCamera:
 
 # ------------------------------------------------------------------------------------------- the robot job ---
 ID_RE = __import__("re").compile(r"^\d{8}-\d{6}$")
-MOVE_DEG_PER_S = 110.0         # goto duration from the largest joint change (smooth min-jerk move, no blur on arrival)
+SWING_DEG_PER_S = 45.0         # the big turns to and from the first photo (body up to 150 degrees): slower still
+MOVE_DEG_PER_S = 60.0          # goto duration from the largest joint change (smooth min-jerk move; slow and gentle on the motors)
 STILL_DEG = 0.06               # head counts as still when two pose reads 40 ms apart differ by less than this
 POINT_TOL_DEG = 2.5             # re-aim a shot when the head lands further than this from where it should look
 POINT_FIXES = 2                 # at most this many corrective nudges per shot
@@ -1310,12 +1313,15 @@ class PanoramaJob:
             prev = Shot(0.0, 0.0)
             per_shot = None
             self._drain(mini)
+            first = shots[0]                  # swing round to the first photo with the head level, tilt and roll afterwards
+            self._goto(mini, create_head_pose(roll=0, pitch=0, yaw=first.yaw, degrees=True), math.radians(first.body),
+                       max(1.0, abs(first.body) / SWING_DEG_PER_S))
             for k, s in enumerate(shots):
                 if self._cancel.is_set():
                     break
                 ts = time.monotonic()
                 change = max(abs(s.yaw - prev.yaw), abs(s.body - prev.body), abs(s.pitch - prev.pitch), abs(s.roll - prev.roll))
-                dur = max(0.3, change / MOVE_DEG_PER_S)
+                dur = max(0.6, change / MOVE_DEG_PER_S)
                 self._point(mini, s, dur, create_head_pose)
                 img = still.grab() if still else self._fresh_frame(mini)
                 if img is None:
@@ -1334,9 +1340,10 @@ class PanoramaJob:
             work.put(None)
             if still is not None:
                 still.__exit__(None, None, None)     # live video comes back
-        # back to where it started (body centred)
+        # back to where it started (body centred): level the head first, then swing the body round
         try:
-            self._goto(mini, start_pose, 0.0, max(0.8, abs(prev.body) / MOVE_DEG_PER_S))
+            self._goto(mini, create_head_pose(roll=0, pitch=0, yaw=prev.yaw, degrees=True), math.radians(prev.body), 1.2)
+            self._goto(mini, start_pose, 0.0, max(1.5, abs(prev.body) / SWING_DEG_PER_S))
         except Exception as e:
             log.warning("could not return after the 360 photo: %s", e)
         return frames
@@ -1412,6 +1419,9 @@ class PanoramaJob:
                 elif "out of range" in msg and attempt < 3:          # the daemon stalled mid-move (e.g. its relay
                     log.warning("move failed (%s); trying it again", e)   # reconnecting): a retry is a fresh move
                     time.sleep(0.4)
+                elif "communication error" in msg and attempt < 4:   # a brief serial glitch to one motor: the link
+                    log.warning("move failed (%s); trying it again", e)   # recovers by itself within a second or two
+                    time.sleep(1.5)
                 else:
                     raise
         raise RuntimeError("The robot was busy with another move.")

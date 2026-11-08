@@ -45,17 +45,17 @@ def test_plan_reachable_and_serpentine(level, n):
 
 def test_roll_limit_matches_the_ik_envelope():
     # from the robot's own inverse kinematics: roll shrinks towards the up-looking pitch limit and with head-body yaw
-    assert P.roll_limit(-40) == 30 and P.roll_limit(-34) == 34 and P.roll_limit(40) == 37
-    assert P.roll_limit(-40, 20) == 26 < P.roll_limit(-40, 0)
+    assert P.roll_limit(-40) == 24 and P.roll_limit(-34) == 28 and P.roll_limit(40) == 31
+    assert P.roll_limit(-40, 20) == 20 < P.roll_limit(-40, 0)
     assert P.roll_limit(-40, 90) == P.roll_limit(-40, 20)            # beyond HEAD_TURN_LIMIT: the worst case
 
 
-@pytest.mark.parametrize("level,sphere", [("ultra_fast", 0.94), ("fast", 0.95), ("regular", 0.95), ("slow", 0.95), ("ultra_slow", 0.95)])
+@pytest.mark.parametrize("level,sphere", [("ultra_fast", 0.91), ("fast", 0.92), ("regular", 0.92), ("slow", 0.92), ("ultra_slow", 0.92)])
 def test_plans_see_most_of_the_sphere(level, sphere):
     # the full-field-of-view camera (3072x1728), which is what the robot captures with
     cov = P.coverage(P.plan(level), P.Camera(size=(3072, 1728)), 360)
     assert cov["sphere"] > sphere
-    assert cov["full_ring_up_to"] > 65 and cov["full_ring_down_to"] < -70
+    assert cov["full_ring_up_to"] > 60 and cov["full_ring_down_to"] < -65
 
 
 # ---------------------------------------------------------------------------------------------- pointing ---
@@ -235,3 +235,26 @@ def test_every_mode_is_reachable_and_overlaps_enough():
 def test_pick_out_w_shrinks_for_many_photos():
     assert P.pick_out_w(3072, avail_mb=3000, n_frames=40) == 6144
     assert P.pick_out_w(3072, avail_mb=3000, n_frames=120) == 4096
+
+
+def test_goto_retries_a_motor_glitch_and_gives_up_on_a_dead_link():
+    class Flaky:
+        def __init__(self, fails): self.fails, self.calls = fails, 0
+        def goto_target(self, head, body_yaw, duration):
+            self.calls += 1
+            if self.calls <= self.fails:
+                raise RuntimeError("Task failed with error: Motor communication error! Check connections")
+    import time as _t
+    real, _t.sleep = _t.sleep, lambda s: None
+    try:
+        m = Flaky(2); P.PanoramaJob._goto(m, np.eye(4), 0.0, 0.5); assert m.calls == 3
+        with pytest.raises(RuntimeError):
+            P.PanoramaJob._goto(Flaky(99), np.eye(4), 0.0, 0.5)
+    finally:
+        _t.sleep = real
+
+
+def test_no_shot_asks_for_the_edge_of_what_the_head_can_do():
+    for mode in P.MODES:
+        for s in P.plan(mode):
+            assert abs(s.pitch) <= 36.0 + 1e-9 and abs(s.roll) <= 30.0 + 1e-9
