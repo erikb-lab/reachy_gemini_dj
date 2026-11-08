@@ -258,3 +258,39 @@ def test_no_shot_asks_for_the_edge_of_what_the_head_can_do():
     for mode in P.MODES:
         for s in P.plan(mode):
             assert abs(s.pitch) <= 36.0 + 1e-9 and abs(s.roll) <= 30.0 + 1e-9
+
+
+def test_normalise_mode_accepts_what_a_small_model_says():
+    for said, want in [("Ultra slow", "ultra_slow"), ("ultra-fast", "ultra_fast"), (" FAST ", "fast"), ("quick", "fast"),
+                       ("regular", "regular"), (None, "regular"), ("", "regular"), ("best", "ultra_slow"), ("slowest", "ultra_slow")]:
+        assert P.normalise_mode(said) == want
+    assert P.normalise_mode("turbo") is None
+
+
+def test_the_brain_gets_every_360_mode_in_its_tool_list():
+    from reachy_gemini_dj.tool_schemas import robot_tool_specs
+    spec = next(s for s in robot_tool_specs() if s["name"] == "take_360_photo")
+    assert spec["kind"] == "action"
+    assert spec["parameters"]["properties"]["mode"]["enum"] == list(P.MODES)
+    assert "required" not in spec["parameters"] or "mode" not in spec["parameters"]["required"]
+    for m in P.modes_listing():                       # the description names each mode with its photo count
+        assert m["id"] in spec["description"] and f"{m['shots']} photos" in spec["description"]
+
+
+def test_voice_tool_starts_a_capture_in_the_requested_mode():
+    from reachy_gemini_dj.gemini import GeminiSession
+    started = []
+
+    class FakePano:
+        def start(self, source, mode=None):
+            started.append((source, mode))
+            return {"ok": P.normalise_mode(mode) is not None}
+
+    s = GeminiSession.__new__(GeminiSession)
+    s.on_event = lambda *a, **k: None
+    s.panorama = FakePano()
+    r = s.execute_tool("take_360_photo", {"mode": "Ultra slow"})
+    assert r["ok"] and "ultra slow" in r["result"] and "80 photos" in r["result"] and started == [("voice", "Ultra slow")]
+    r = s.execute_tool("take_360_photo", {})
+    assert r["ok"] and "regular" in r["result"] and "42 photos" in r["result"]
+    assert "error" in s.execute_tool("take_360_photo", {"mode": "turbo"})

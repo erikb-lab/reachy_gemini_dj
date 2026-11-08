@@ -31,6 +31,25 @@ You can play and control music, move your head, dance and show emotions, check t
 """
 
 
+def _take_360_declaration() -> "types.FunctionDeclaration":
+    """The 360 photo tool; the modes, photo counts and times come from panorama.MODES so they cannot drift."""
+    from .panorama import DEFAULT_MODE, modes_listing
+    modes = modes_listing()
+    menu = "; ".join(f"{m['id']} ({m['shots']} photos, about {max(1, round(m['seconds'] / 60))} min)" for m in modes)
+    return types.FunctionDeclaration(
+        name="take_360_photo",
+        description="Take a 360-degree photo sphere of the room: the robot turns all the way around, then the photo "
+                    "appears on the control page (Robot tab). Use for a 360 photo, panorama or photo sphere. Tell people "
+                    "to step out of the shot. mode = how many photos: " + menu + ". Default " + DEFAULT_MODE +
+                    ". Quick, preview or in a hurry means ultra_fast or fast; best, highest quality or no rush means "
+                    "slow or ultra_slow. More photos give a cleaner result and take longer.",
+        parameters=types.Schema(type="OBJECT", properties={
+            "mode": types.Schema(type="STRING", enum=[m["id"] for m in modes],
+                                 description="Number of photos. Omit for " + DEFAULT_MODE + "."),
+        }),
+    )
+
+
 def build_tools(enable_search: bool = False) -> list[types.Tool]:
     """Build function declarations for Gemini function calling."""
     declarations = [
@@ -161,18 +180,7 @@ def build_tools(enable_search: bool = False) -> list[types.Tool]:
                 required=["name"],
             ),
         ),
-        types.FunctionDeclaration(
-            name="take_360_photo",
-            description="Take a 360-degree photo sphere of the room: the robot turns all the way around, then the photo "
-                        "appears on the control page (Robot tab). Use when asked for a 360 photo, panorama or photo "
-                        "sphere. Tell people to step out of the shot. Mode sets the number of photos: ultra_fast (15, "
-                        "about 1.5 min), fast (25, 2.5 min), regular (42, 4.5 min, the default), slow (60, 6 min), "
-                        "ultra_slow (80, 8 min).",
-            parameters=types.Schema(type="OBJECT", properties={
-                "mode": types.Schema(type="STRING", enum=["ultra_fast", "fast", "regular", "slow", "ultra_slow"],
-                                     description="How many photos to take. Omit for regular."),
-            }),
-        ),
+        _take_360_declaration(),
         # FRC (FIRST Robotics Competition) tools: QR scan, FRC Nexus queuing, The Blue Alliance
         types.FunctionDeclaration(
             name="scan_qr",
@@ -713,8 +721,8 @@ class GeminiSession:
                 res = pano.start("voice", args.get("mode"))
                 if not res.get("ok"):
                     return {"error": res.get("error", "Could not start the 360 photo")}
-                from .panorama import DEFAULT_MODE, MODE_ALIASES, mode_estimate_s, mode_shots
-                mode = MODE_ALIASES.get(args.get("mode") or DEFAULT_MODE, args.get("mode") or DEFAULT_MODE)
+                from .panorama import mode_estimate_s, mode_shots, normalise_mode
+                mode = normalise_mode(args.get("mode"))
                 return {"ok": True, "result": f"Started ({mode.replace('_', ' ')}, {mode_shots(mode)} photos): turning around, "
                                               f"about {mode_estimate_s(mode) // 60 + 1} minutes in all; the photo will be on "
                                               "the control page's Robot tab."}
