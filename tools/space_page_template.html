@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reachy Gemini DJ</title>
+<meta name="description" content="A voice DJ, 360° photographer and helper for the Pollen Robotics Reachy Mini. Free local voice, no wake word.">
+<style>
+:root{
+  --bg:#f6f7fb; --bg2:#ffffff; --ink:#14172a; --mute:#575d78; --line:#dcdfec; --card:#ffffff;
+  --a1:#5b4bdb; --a2:#0a9cc4; --a3:#e2574c; --glow:rgba(91,75,219,.16);
+  --code:#0f1226; --codeink:#c7d2fe; --map:#e9ecf7; --maplines:rgba(20,23,42,.10);
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#090b14; --bg2:#0e1120; --ink:#eceffd; --mute:#9aa1c2; --line:#222741; --card:#121629;
+    --a1:#8b7dff; --a2:#33c6ee; --a3:#ff7a6e; --glow:rgba(139,125,255,.20);
+    --code:#070914; --codeink:#b8c4ff; --map:#0b0e1c; --maplines:rgba(236,239,253,.09);
+  }
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--a1)} a:hover{text-decoration:none}
+:focus-visible{outline:3px solid var(--a2);outline-offset:3px;border-radius:6px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+/* nav */
+nav{position:sticky;top:0;z-index:5;backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:20px;height:58px}
+.brand{font-weight:800;letter-spacing:-.01em;color:var(--ink);text-decoration:none;display:flex;align-items:center;gap:9px}
+.brand i{font-style:normal;font-size:20px}
+nav .links{margin-left:auto;display:flex;gap:18px;font-size:14px}
+nav .links a{color:var(--mute);text-decoration:none;font-weight:600} nav .links a:hover{color:var(--ink)}
+@media(max-width:560px){nav .links a:nth-child(-n+2){display:none}}
+/* hero */
+.hero{position:relative;overflow:hidden;padding:84px 0 70px;text-align:center}
+.hero:before{content:"";position:absolute;inset:-40% -10% auto;height:120%;background:radial-gradient(60% 50% at 50% 30%,var(--glow),transparent 70%);pointer-events:none}
+.pill{display:inline-block;font-size:13px;font-weight:700;color:var(--a1);border:1px solid color-mix(in srgb,var(--a1) 40%,transparent);padding:5px 13px;border-radius:99px;background:color-mix(in srgb,var(--a1) 9%,transparent)}
+h1{font-size:clamp(38px,7vw,72px);line-height:1.02;letter-spacing:-.035em;margin:20px auto 18px;max-width:19ch;font-weight:850}
+h1 span{background:linear-gradient(100deg,var(--a1),var(--a2) 60%,var(--a3));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lede{font-size:clamp(17px,2.2vw,21px);color:var(--mute);max-width:46ch;margin:0 auto 30px}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:13px 24px;border-radius:13px;font-weight:700;text-decoration:none;font-size:15px;border:1px solid var(--line);color:var(--ink);background:var(--card);transition:transform .15s,box-shadow .15s}
+.btn:hover{transform:translateY(-2px);box-shadow:0 10px 26px var(--glow)}
+.btn.main{background:linear-gradient(110deg,var(--a1),var(--a2));color:#fff;border-color:transparent}
+.eq{display:flex;gap:5px;align-items:flex-end;justify-content:center;height:64px;margin:46px auto 0}
+.eq b{width:7px;border-radius:4px;background:linear-gradient(var(--a2),var(--a1));animation:bar 1.3s ease-in-out infinite;transform-origin:bottom}
+@keyframes bar{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+.chips{display:flex;flex-wrap:wrap;gap:9px;justify-content:center;margin-top:30px}
+.chips span{font-size:13.5px;font-weight:600;color:var(--mute);border:1px solid var(--line);border-radius:99px;padding:6px 14px;background:var(--card)}
+/* sections */
+section{padding:72px 0}
+.alt{background:var(--bg2);border-block:1px solid var(--line)}
+.eyebrow{font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--a1)}
+h2{font-size:clamp(28px,4.4vw,42px);line-height:1.1;letter-spacing:-.025em;margin:10px 0 14px;font-weight:820}
+.sub{color:var(--mute);max-width:60ch;font-size:18px;margin:0 0 38px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;transition:transform .18s,box-shadow .18s,border-color .18s}
+.card:hover{transform:translateY(-3px);box-shadow:0 14px 34px var(--glow);border-color:color-mix(in srgb,var(--a1) 45%,var(--line))}
+.card svg{width:34px;height:34px;stroke:var(--a1);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;margin-bottom:12px}
+.card h3{margin:0 0 6px;font-size:18px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--mute);font-size:15px}
+.card.hot{border-color:color-mix(in srgb,var(--a3) 50%,var(--line))} .card.hot svg{stroke:var(--a3)}
+/* 360 */
+.pano{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:40px;align-items:center}
+@media(max-width:860px){.pano{grid-template-columns:1fr}}
+.modes{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.modes button{font:inherit;font-weight:700;font-size:14px;padding:9px 15px;border-radius:11px;border:1px solid var(--line);background:var(--card);color:var(--mute);cursor:pointer;transition:all .15s}
+.modes button:hover{color:var(--ink);border-color:var(--a1)}
+.modes button[aria-checked=true]{background:linear-gradient(110deg,var(--a1),var(--a2));color:#fff;border-color:transparent}
+.mapbox{background:var(--map);border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:0 18px 50px var(--glow)}
+canvas{display:block;width:100%;height:auto;border-radius:10px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--mute);margin:10px 4px 0}.legend span{display:flex;align-items:center;gap:6px}.legend i{width:14px;height:14px;border-radius:4px;display:inline-block}
+.stats{display:flex;gap:26px;flex-wrap:wrap;margin:16px 4px 2px}
+.stats div b{display:block;font-size:26px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stats div span{font-size:13px;color:var(--mute)}
+.note{font-size:13.5px;color:var(--mute);margin:12px 4px 0}
+.facts{list-style:none;padding:0;margin:20px 0 0;display:grid;gap:11px}
+.facts li{padding-left:28px;position:relative;color:var(--mute);font-size:15.5px}
+.facts li:before{content:"";position:absolute;left:2px;top:.5em;width:12px;height:12px;border-radius:4px;background:linear-gradient(135deg,var(--a1),var(--a2))}
+.facts b{color:var(--ink)}
+/* how */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;counter-reset:s}
+.step{position:relative;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 22px 22px}
+.step:before{counter-increment:s;content:counter(s);position:absolute;top:-14px;left:20px;width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--a1),var(--a2));color:#fff;font-weight:800;display:grid;place-items:center;font-size:14px}
+.step h3{margin:6px 0 6px;font-size:18px} .step p{margin:0;color:var(--mute);font-size:15px}
+/* install */
+.code{position:relative;background:var(--code);color:var(--codeink);border-radius:14px;padding:16px 56px 16px 18px;font:13.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-x:auto;margin:10px 0 18px;white-space:pre}
+.copy{position:absolute;right:10px;top:10px;font:600 12px system-ui;color:var(--codeink);background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:5px 9px;cursor:pointer}
+.copy:hover{background:rgba(255,255,255,.16)}
+.inst h3{margin:26px 0 0;font-size:16px}
+footer{padding:44px 0 60px;color:var(--mute);font-size:14px;border-top:1px solid var(--line)}
+footer .wrap{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center}
+footer a{color:var(--mute);font-weight:600} footer .r{margin-left:auto}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="brand" href="#top"><i>🎧</i> Reachy Gemini DJ</a>
+  <div class="links"><a href="#features">Features</a><a href="#photos">360° photos</a><a href="#install">Install</a><a href="https://github.com/erikb-lab/reachy_gemini_dj">GitHub</a></div>
+</div></nav>
+
+<header class="hero" id="top"><div class="wrap">
+  <span class="pill">For Pollen Robotics Reachy Mini · v0.9.6</span>
+  <h1>A DJ that <span>listens, looks</span> and moves.</h1>
+  <p class="lede">Talk to your Reachy Mini with no wake word. It plays music, dances, describes what it sees, takes 360° photos and helps at FIRST Robotics events. The voice is free and runs on your own network.</p>
+  <div class="cta"><a class="btn main" href="#install">Install it</a><a class="btn" href="#photos">See 360° photos</a></div>
+  <div class="eq" aria-hidden="true"></div>
+  <div class="chips"><span>No wake word</span><span>Free, local voice</span><span>No cloud needed</span><span>Runs on your Wi-Fi</span><span>FRC ready</span></div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <div class="eyebrow">What it does</div>
+  <h2>Everything a tabletop robot should do.</h2>
+  <p class="sub">Say it out loud. Reachy handles the rest, and the control page on your phone covers anything you would rather tap.</p>
+  <div class="grid">
+    <div class="card hot"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12"/><circle cx="16" cy="16" r="4"/><path d="M4 16h24M16 4v24" opacity=".5"/></svg><h3>360° photos</h3><p>Reachy turns on the spot and stitches a full photo sphere on the robot. Five modes, from a 2-minute preview to 80 photos.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><path d="M11 24V8l14-3v16"/><circle cx="8" cy="24" r="3"/><circle cx="22" cy="21" r="3"/></svg><h3>Music DJ</h3><p>"Play some chill lo-fi." Streams, never downloads, ducks while you talk, and has a queue, favourites and an equalizer.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><rect x="7" y="9" width="18" height="14" rx="5"/><circle cx="12.5" cy="16" r="1.6"/><circle cx="19.5" cy="16" r="1.6"/><path d="M16 9V5M12 27h8"/></svg><h3>Moves and emotions</h3><p>Pollen's emotion and dance libraries, plus poses you teach by hand and call by name.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><path d="M3 16s5-8 13-8 13 8 13 8-5 8-13 8S3 16 3 16z"/><circle cx="16" cy="16" r="4"/></svg><h3>Camera</h3><p>"What do you see?" A local vision model describes the scene. Nothing leaves your network.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><path d="M16 4v6M16 22v6M4 16h6M22 16h6M8 8l4 4M20 20l4 4M24 8l-4 4M12 20l-4 4"/></svg><h3>Weather and web</h3><p>Free lookups through Open-Meteo and DuckDuckGo. No keys, no sign-ups.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><circle cx="16" cy="17" r="10"/><path d="M16 11v6l4 3M12 4h8"/></svg><h3>Timers and alarms</h3><p>Timers, reminders and wake-up alarms that survive a restart and ring until you answer.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><path d="M8 5h16v22l-8-5-8 5z"/></svg><h3>Memory</h3><p>"Remember our pit is A3." Facts live on the robot, and you can read and edit them.</p></div>
+    <div class="card"><svg viewBox="0 0 32 32"><path d="M6 27V6l17 6-17 6M6 27h0"/><path d="M24 14l3 3-3 3"/></svg><h3>FRC helper</h3><p>Scan your Nexus QR code, hear queue alerts, and look up any team's history and results.</p></div>
+  </div>
+</div></section>
+
+<section id="photos" class="alt"><div class="wrap">
+  <div class="eyebrow">360° photo sphere</div>
+  <h2>Pick how careful it should be.</h2>
+  <p class="sub">More photos sit closer together, so seams are cleaner. The map shows exactly where each photo lands on the sphere.</p>
+  <div class="pano">
+    <div>
+      <div class="modes" role="radiogroup" aria-label="360° photo mode" id="modes"></div>
+      <ul class="facts">
+        <li><b>Say it:</b> "take a fast 360 photo", or press the button on the Robot tab.</li>
+        <li><b>Sharp.</b> Full resolution, full field of view, with autofocus. Reachy waits for each picture to settle.</li>
+        <li><b>Stitched on the robot.</b> Up to 6144 px wide, with Google photo-sphere metadata.</li>
+        <li><b>Private.</b> Pictures stay on the robot. Delete removes the raw photos too.</li>
+        <li><b>Needs a flat surface</b> and a clear area. Live video pauses while it works.</li>
+      </ul>
+    </div>
+    <div class="mapbox">
+      <canvas id="map" width="1200" height="600" role="img" aria-label="Map of the sphere, coloured by how many photos see each spot"></canvas>
+      <div class="legend" id="legend" aria-hidden="true"><span><i></i>seen once</span><span><i></i>twice</span><span><i></i>3 times</span><span><i></i>4+</span></div>
+      <div class="stats" aria-live="polite">
+        <div><b id="sShots">42</b><span>photos</span></div>
+        <div><b id="sTime">~5 min</b><span>on the robot</span></div>
+        <div><b id="sSeen">93%</b><span>of the sphere seen</span></div>
+        <div><b id="sTwice">91%</b><span>seen by 2+ photos</span></div>
+      </div>
+      <p class="note" id="mNote"></p>
+    </div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <div class="eyebrow">How it fits together</div>
+  <h2>The robot stays light. The brain runs nearby.</h2>
+  <p class="sub">Speech recognition, the language model and the voice run on a computer on your network, not in the cloud. Gemini Live is optional.</p>
+  <div class="steps">
+    <div class="step"><h3>Reachy Mini</h3><p>Runs the app: mics, speaker, camera, motors, the control page and the 360° stitching.</p></div>
+    <div class="step"><h3>The brain</h3><p>A laptop on the same Wi-Fi runs the free local models. First start warms up for a couple of minutes, then replies are quick.</p></div>
+    <div class="step"><h3>Your phone</h3><p>Open <code>reachy-mini.local:8042</code> for volume, the gallery, push-to-talk, poses and settings.</p></div>
+  </div>
+</div></section>
+
+<section id="install" class="alt inst"><div class="wrap">
+  <div class="eyebrow">Get started</div>
+  <h2>Install in a minute.</h2>
+  <h3>Easiest: the app store</h3>
+  <p class="sub" style="margin:6px 0 0">Open <b>Reachy Mini Control</b>, then <b>Applications</b>, then <b>Discover Apps</b>. Find <b>Reachy Gemini DJ</b> and press <b>Install</b>.</p>
+  <h3>Or with the REST API</h3>
+  <div class="code" data-copy>curl -X POST http://reachy-mini.local:8000/api/apps/install \
+  -H "Content-Type: application/json" \
+  -d '{"name": "reachy_gemini_dj", "source_kind": "hf_space", "url": "https://huggingface.co/spaces/sillymastermind/reachy_gemini_dj"}'<button class="copy" type="button">Copy</button></div>
+  <h3>Then</h3>
+  <p class="sub" style="margin:6px 0 0">Start the brain on a computer on the same network, open <code>http://reachy-mini.local:8042</code>, set <b>Brain URL</b> in Settings, and start talking. Try "play some lo-fi", "what do you see?" or "take a 360 photo".</p>
+  <div class="cta" style="justify-content:flex-start;margin-top:26px">
+    <a class="btn main" href="https://github.com/erikb-lab/reachy_gemini_dj#readme">Full setup guide</a>
+    <a class="btn" href="https://huggingface.co/docs/reachy_mini/en/index">Reachy Mini docs</a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <span>🎧 Reachy Gemini DJ</span>
+  <a href="https://github.com/erikb-lab/reachy_gemini_dj">Source on GitHub</a>
+  <a href="https://huggingface.co/docs/reachy_mini/en/index">Reachy Mini</a>
+  <span class="r">Not affiliated with Pollen Robotics.</span>
+</div></footer>
+
+<script>
+(function(){
+  // ---- equalizer bars
+  var eq=document.querySelector('.eq'),h='';
+  for(var i=0;i<40;i++){var m=Math.sin(i/39*Math.PI);h+='<b style="height:'+Math.round(14+m*50)+'px;animation-delay:'+(-(i*0.09)).toFixed(2)+'s;animation-duration:'+(1.0+((i*7)%5)*0.12).toFixed(2)+'s"></b>';}
+  eq.innerHTML=h;
+  // ---- 360 photo map. SHOTS: one outline per photo, [lon,lat] in degrees (tools/space_shots.py draws them from the app's real plans)
+  var SHOTS=/*SHOTS*/;
+  var MODES=[
+    {id:'ultra_fast',label:'Ultra fast',shots:15,min:'~2 min',seen:93,twice:53,note:'A quick preview. Neighbouring photos barely overlap, so expect visible seams.'},
+    {id:'fast',label:'Fast',shots:25,min:'~3 min',seen:93,twice:84,note:'Good for most rooms.'},
+    {id:'regular',label:'Regular',shots:42,min:'~5 min',seen:93,twice:91,note:'The default. Photos sit 30° apart around the room.'},
+    {id:'slow',label:'Slow',shots:60,min:'~7 min',seen:93,twice:92,note:'Closer photos shrink the steps on near objects such as a floor or a bed.'},
+    {id:'ultra_slow',label:'Ultra slow',shots:80,min:'~7 min',seen:93,twice:92,note:'The cleanest result. The picture is 4096 px wide so the robot has enough memory.'}
+  ];
+  var cv=document.getElementById('map'),cx=cv.getContext('2d'),W=cv.width,H=cv.height,cur='regular';
+  function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+  function X(lon){return (lon+180)/360*W;} function Y(lat){return (90-lat)/180*H;}
+  var off=document.createElement('canvas');off.width=W;off.height=H;var ox=off.getContext('2d');
+  var RAMPS={light:{bg:[233,236,247],c:[[226,87,76],[141,152,236],[91,75,219],[52,38,160],[28,18,100]]},
+             dark:{bg:[11,14,28],c:[[255,122,110],[88,104,200],[123,150,255],[170,215,255],[238,250,255]]}};
+  function draw(){
+    var dark=window.matchMedia('(prefers-color-scheme:dark)').matches,R=RAMPS[dark?'dark':'light'];
+    // count how many photos cover each pixel: draw every outline opaque-additively, read the red channel back
+    ox.globalCompositeOperation='source-over';ox.fillStyle='#000';ox.fillRect(0,0,W,H);
+    ox.globalCompositeOperation='lighter';ox.fillStyle='rgb(30,0,0)';
+    SHOTS[cur].forEach(function(p){[-360,0,360].forEach(function(sh){
+      var minx=1e9,maxx=-1e9;p.forEach(function(q){var x=X(q[0]+sh);if(x<minx)minx=x;if(x>maxx)maxx=x;});
+      if(maxx<0||minx>W)return;
+      ox.beginPath();p.forEach(function(q,i){var x=X(q[0]+sh),y=Y(q[1]);i?ox.lineTo(x,y):ox.moveTo(x,y);});ox.closePath();ox.fill();});});
+    var img=ox.getImageData(0,0,W,H),d=img.data;
+    for(var k=0;k<d.length;k+=4){
+      var n=Math.min(5,Math.round(d[k]/30)),c=n?R.c[n-1]:R.bg;d[k]=c[0];d[k+1]=c[1];d[k+2]=c[2];d[k+3]=255;}
+    cx.putImageData(img,0,0);
+    cx.strokeStyle=css('--maplines');cx.lineWidth=1.5;cx.beginPath();
+    for(var lo=-150;lo<=150;lo+=30){cx.moveTo(X(lo),0);cx.lineTo(X(lo),H);}
+    for(var la=-60;la<=60;la+=30){cx.moveTo(0,Y(la));cx.lineTo(W,Y(la));}
+    cx.stroke();
+    cx.fillStyle=css('--mute');cx.font='600 22px system-ui,sans-serif';
+    cx.fillText('360\u00b0 around',12,32);cx.fillText('ceiling',W-92,32);cx.fillText('floor',W-74,H-14);
+    var lg=document.getElementById('legend');
+    if(lg&&!lg.dataset.done){lg.dataset.done=1;}
+    [].forEach.call(document.querySelectorAll('#legend i'),function(el,n){var c=R.c[Math.min(n,4)];el.style.background='rgb('+c.join(',')+')';});
+  }
+  function show(id){
+    cur=id;var m=MODES.filter(function(x){return x.id===id;})[0];
+    document.getElementById('sShots').textContent=m.shots;document.getElementById('sTime').textContent=m.min;
+    document.getElementById('sSeen').textContent=m.seen+'%';document.getElementById('sTwice').textContent=m.twice+'%';
+    document.getElementById('mNote').textContent=m.note;
+    [].forEach.call(document.querySelectorAll('#modes button'),function(b){b.setAttribute('aria-checked',b.dataset.id===id);b.tabIndex=b.dataset.id===id?0:-1;});
+    draw();
+  }
+  var box=document.getElementById('modes');
+  MODES.forEach(function(m){var b=document.createElement('button');b.type='button';b.setAttribute('role','radio');b.dataset.id=m.id;b.textContent=m.label+' · '+m.shots;b.onclick=function(){show(m.id);};box.appendChild(b);});
+  box.addEventListener('keydown',function(e){var i=MODES.findIndex(function(x){return x.id===cur;});
+    if(e.key==='ArrowRight'||e.key==='ArrowDown')i=(i+1)%MODES.length;else if(e.key==='ArrowLeft'||e.key==='ArrowUp')i=(i+MODES.length-1)%MODES.length;else return;
+    e.preventDefault();show(MODES[i].id);box.querySelector('[data-id='+MODES[i].id+']').focus();});
+  window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
+  show('regular');
+  // ---- copy buttons
+  [].forEach.call(document.querySelectorAll('[data-copy]'),function(el){
+    var b=el.querySelector('.copy');b.onclick=function(){
+      var t=el.textContent.replace(/Copy$/,'').trim();
+      (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1600);},function(){b.textContent='Select + copy';});
+    };});
+})();
+</script>
+</body>
+</html>
