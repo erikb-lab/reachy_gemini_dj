@@ -164,6 +164,7 @@ class Motion:
         self._thinking = False                 # wanted: head tilted while the brain thinks
         self._tilted = False                   # the head is actually tilted
         self.manual = False                    # gamepad drive mode: other moves are ignored while it is on
+        self.held = ""                         # set while a task (e.g. a 360 photo) drives the motors itself
         self._drive_cmd: dict = {}             # what the motors were last told
         self._drive_want: dict = {}            # what the page asked for
         self._drive_seen = 0.0                 # last input from the page (monotonic)
@@ -209,7 +210,7 @@ class Motion:
 
     def moving(self) -> bool:
         """True while Reachy moves itself or is limp for hand posing (the IMU watcher must ignore the sensor then)."""
-        return bool(self.busy or self.learning or self.manual or not self._q.empty())
+        return bool(self.busy or self.learning or self.manual or self.held or not self._q.empty())
 
     def status(self) -> dict:
         return {
@@ -221,6 +222,7 @@ class Motion:
             "error": self.error or "; ".join(v for k, v in self._lib_err.items() if not k.endswith("_t")),
             "learning": self.learning,
             "manual": self.manual,
+            "held": self.held,
             "poses": self.poses.names(),
         }
 
@@ -247,6 +249,9 @@ class Motion:
             return
         if self.manual:
             log.info("Gamepad mode is on; ignoring move: %s", label)
+            return
+        if self.held:
+            log.info("%s in progress; ignoring move: %s", self.held, label)
             return
         if not self._enabled():
             log.debug("Movement is turned off in the settings; ignoring move: %s", label)
@@ -344,7 +349,7 @@ class Motion:
         if on:
             if self._thinking:
                 return
-            if self.learning or self.manual or not self._enabled() or self.busy or not self._q.empty():
+            if self.learning or self.manual or self.held or not self._enabled() or self.busy or not self._q.empty():
                 return
             self._thinking = True
 
@@ -382,6 +387,8 @@ class Motion:
         """Turn the motors off so the robot can be posed freely by hand (the head will not hold itself up)."""
         if self.learning:
             return "already in learn mode"
+        if self.held:
+            return f"can't relax the motors: {self.held} in progress"
         if self.manual:
             self.drive_stop()
         while self.busy:                       # let a running move finish before going limp
@@ -477,6 +484,8 @@ class Motion:
         """Gamepad mode on: motors on, other moves paused, start from where the robot is now."""
         if self.manual:
             return self.drive_state()
+        if self.held:
+            raise RuntimeError(f"{self.held} in progress.")
         if self.learning:
             self.learn_stop()
         try:                                   # drop a queued move and let a running one finish
@@ -497,6 +506,27 @@ class Motion:
         self.last = "gamepad mode"
         log.info("gamepad mode on")
         return self.drive_state()
+
+    def hold_begin(self, label: str) -> None:
+        """Take the motors for a task that moves the robot itself: other moves are ignored until hold_end()."""
+        if self.manual:
+            self.drive_stop()
+        self.held = label
+        self._thinking = self._tilted = False
+        try:                                   # drop a queued move and let a running one finish
+            self._q.get_nowait()
+        except queue.Empty:
+            pass
+        deadline = time.monotonic() + 8.0
+        while self.busy and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.last = label
+        log.info("motors held for %s", label)
+
+    def hold_end(self) -> None:
+        if self.held:
+            log.info("motors released after %s", self.held)
+        self.held = ""
 
     def drive_stop(self) -> dict:
         """Gamepad mode off. The robot keeps holding the last pose; normal moves resume."""

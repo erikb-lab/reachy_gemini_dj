@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from reachy_mini import ReachyMini, ReachyMiniApp
@@ -30,6 +30,7 @@ from .gemini import GeminiSession, VOICES
 from .google import GoogleAccount
 from .motion import Motion, EMOTION_NAMES
 from .motor_health import MotorHealth
+from .panorama import PanoramaJob
 from .gain import clamp_duck, clamp_volume
 from .memory import MAX_CHARS, MAX_FACTS, Memory
 from .music import MusicPlayer
@@ -270,6 +271,11 @@ class ReachyGeminiDJ(ReachyMiniApp):
         )
         self.gemini_session.imu = self.imu
 
+        # 360° photos (panorama.py): the robot turns through a grid of poses and stitches a photo sphere on the robot
+        self.panorama = PanoramaJob(get_mini=lambda: self._mini, on_event=self.record_event,
+                                    motion_enabled=lambda: self.config.motion_enabled)
+        self.gemini_session.panorama = self.panorama
+
         # Register routes immediately so that when wrapped_run() launches FastAPI, routes exist!
         self._setup_routes()
 
@@ -300,7 +306,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
     def _imu_suppressed(self) -> bool:
         """Ignore the IMU while Reachy moves itself, is limp for hand posing, or is in quiet mode."""
         m = self.motion
-        return bool(self.quiet.active or (m is not None and m.moving()))
+        return bool(self.quiet.active or (m is not None and m.moving()) or self.panorama.busy())
 
     def _set_muted(self, muted: bool) -> None:
         self.muted = bool(muted)
@@ -661,6 +667,42 @@ class ReachyGeminiDJ(ReachyMiniApp):
                               "Could not clear: " + ", ".join(res["cleared"][n]["label"] for n in res["faults"]))
             return {"ok": not res["faults"], **res}
 
+        # 360° photos. capture starts the robot turning (~40 photos, then a stitch on the robot); the page polls status.
+        # Photos are kept on the robot in ~/.reachy_gemini_dj/panoramas (newest 30), as 2:1 JPEGs with GPano metadata.
+        @app.post("/api/panorama/capture")
+        def panorama_capture():
+            return self.panorama.start("page")
+
+        @app.get("/api/panorama/status")
+        def panorama_status():
+            return self.panorama.status()
+
+        @app.post("/api/panorama/cancel")
+        def panorama_cancel():
+            return self.panorama.cancel()
+
+        @app.get("/api/panorama/list")
+        def panorama_list():
+            return {"items": self.panorama.list()}
+
+        @app.get("/api/panorama/{pid}.jpg")
+        def panorama_file(pid: str):
+            p = self.panorama.path(pid)
+            if not p:
+                return JSONResponse({"ok": False, "error": "No such photo"}, status_code=404)
+            return FileResponse(p, media_type="image/jpeg", filename=f"reachy-360-{pid}.jpg")
+
+        @app.get("/api/panorama/{pid}/thumb.jpg")
+        def panorama_thumb(pid: str):
+            p = self.panorama.path(pid, thumb=True)
+            if not p:
+                return JSONResponse({"ok": False, "error": "No such photo"}, status_code=404)
+            return FileResponse(p, media_type="image/jpeg")
+
+        @app.delete("/api/panorama/{pid}")
+        def panorama_delete(pid: str):
+            return {"ok": self.panorama.delete(pid)}
+
         @app.post("/api/poses/save")
         def save_pose(req: PoseName):
             if not self.motion:
@@ -792,6 +834,7 @@ class ReachyGeminiDJ(ReachyMiniApp):
             dance_enabled=lambda: self.config.dance_enabled,
         )
         self.voice.motion = self.motion
+        self.panorama.motion = self.motion
         self._mini = reachy_mini
 
         self.audio_pipe = AudioPipeline(
