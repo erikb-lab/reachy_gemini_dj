@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 import json
 import logging
 import threading
 import time
+import uuid
 from typing import Any, Callable
 
 import numpy as np
@@ -70,6 +72,8 @@ class RemoteSession:
         self._out: asyncio.Queue | None = None
         self._restart: asyncio.Event | None = None
         self._turn_started: float | None = None
+        self._ws = None                                          # the open brain connection (for requests that must not be dropped)
+        self._voice_waiters: dict[str, concurrent.futures.Future] = {}
 
     # ---------- public surface (same as GeminiSession) ----------
     def start(self) -> None:
@@ -111,6 +115,31 @@ class RemoteSession:
 
     def new_conversation(self) -> None:
         self._send_json_threadsafe({"type": "new_conversation"})
+
+    def voice_call(self, msg: dict, timeout: float = 120.0) -> dict:
+        """Ask the brain something about its voices (list, create, use, delete) and wait for the answer. Always returns a
+        dict with "ok"; "error" is a sentence for the person using the control page. Goes straight to the connection
+        (not through the microphone queue, which drops old items when it is full)."""
+        ws, loop = self._ws, self._loop
+        if not (self.connected and ws is not None and loop):
+            return {"ok": False, "error": "The voice brain is not connected right now."}
+        rid = uuid.uuid4().hex[:12]
+        fut: concurrent.futures.Future = concurrent.futures.Future()
+        self._voice_waiters[rid] = fut
+        try:
+            asyncio.run_coroutine_threadsafe(ws.send(json.dumps({**msg, "rid": rid})), loop).result(30)
+            return fut.result(timeout)
+        except concurrent.futures.TimeoutError:
+            return {"ok": False, "error": "The brain did not answer in time. Cloning can take a minute; check the list again."}
+        except Exception as e:
+            return {"ok": False, "error": f"Could not reach the brain ({type(e).__name__})."}
+        finally:
+            self._voice_waiters.pop(rid, None)
+
+    def _fail_voice_waiters(self, why: str) -> None:
+        for fut in list(self._voice_waiters.values()):
+            if not fut.done():
+                fut.set_result({"ok": False, "error": why})
 
     @property
     def turn_overdue(self) -> bool:
@@ -193,6 +222,7 @@ class RemoteSession:
                 async with websockets.connect(url, max_size=8 * 1024 * 1024, open_timeout=5,
                                               ping_interval=20, ping_timeout=20) as ws:
                     self._restart.clear()
+                    self._ws = ws
                     self.connected = True
                     self.last_connect_ok = time.monotonic()
                     self.last_error = ""
@@ -219,6 +249,8 @@ class RemoteSession:
                 log.warning("Brain connection problem: %s", e)
             finally:
                 self.connected = False
+                self._ws = None
+                self._fail_voice_waiters("The brain disconnected.")
                 self._turn_started = None
                 self.on_barge_in()
                 self._emit_state("disconnected")
@@ -270,6 +302,10 @@ class RemoteSession:
                 asyncio.create_task(self._run_tool(ws, m))
             elif t == "request_frame":
                 asyncio.create_task(self._send_frame(ws, m.get("id", "")))
+            elif t == "voice_result":
+                fut = self._voice_waiters.get(m.get("rid"))
+                if fut and not fut.done():
+                    fut.set_result({k: v for k, v in m.items() if k not in ("type", "rid")})
             elif t == "event":
                 self.on_event(m.get("kind", "brain"), m.get("text", ""))
             elif t == "ready":

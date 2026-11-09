@@ -28,6 +28,7 @@
   <div class="tabs" role="tablist" aria-label="Sections" id="tabs">
     <button role="tab" id="tab-dj" aria-controls="p-dj" aria-selected="true">DJ</button>
     <button role="tab" id="tab-robot" aria-controls="p-robot" aria-selected="false" tabindex="-1">Robot</button>
+    <button role="tab" id="tab-voices" aria-controls="p-voices" aria-selected="false" tabindex="-1">Voices</button>
     <button role="tab" id="tab-settings" aria-controls="p-settings" aria-selected="false" tabindex="-1">Settings</button>
   </div>
 
@@ -95,6 +96,11 @@
   <!-- ========== ROBOT (mount point for robot.js) ========== -->
   <div class="tabpanel hide" role="tabpanel" id="p-robot" aria-labelledby="tab-robot">
     <section id="robot-panel"><div class="placeholder" data-placeholder>Robot controls are loading&hellip;</div></section>
+  </div>
+
+  <!-- ========== VOICES (mount point for voices.js) ========== -->
+  <div class="tabpanel hide" role="tabpanel" id="p-voices" aria-labelledby="tab-voices">
+    <section id="voices-panel"></section>
   </div>
 
   <!-- ========== SETTINGS (mount point for settings.js + built-in quick settings) ========== -->
@@ -195,6 +201,8 @@
 <script src="/static/motors.js" defer></script>
 <link rel="stylesheet" href="/static/panorama.css">
 <script src="/static/panorama.js" defer></script>
+<link rel="stylesheet" href="/static/voices.css">
+<script src="/static/voices.js" defer></script>
 <script src="/static/eq.js" defer></script>
 <script src="/static/experimental.js" defer></script>
 <script src="/static/settings-nav.js" defer></script>

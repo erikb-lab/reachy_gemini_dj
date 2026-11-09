@@ -37,6 +37,8 @@ questions.
   Limits follow Pollen's documented ranges (head pitch/roll ±40°, head yaw ±180°, body ±160°, head within 65° of the
   body). The **Motor health** card on the Robot tab shows motor errors and clears an overload without a power cycle.
 - **Camera.** Ask "what do you see?" and the local vision model describes what is in front of Reachy.
+- **Voices.** The **Voices** tab lists the voices Reachy can speak with and lets you add one from a short recording of
+  someone who agreed to it. The new voice is ready in a few seconds ([details below](#voices)).
 - **360° photos.** Say "take a 360 photo" (or press **Take 360° photo** on the Robot tab). Reachy turns all the way
   around, takes sharp full-resolution photos, and stitches one 360° picture on the robot, up to 6144 px wide. You
   choose how many photos to take, from a 2-minute preview to an 80-photo slow mode
@@ -57,6 +59,28 @@ questions.
   music and for Reachy's voice, and works on phones.
 
 ---
+
+## Voices
+
+Open the **Voices** tab on the control page. It shows the voice Reachy speaks with now (the built-in one at first) and
+any voices you added. Press **Use this voice** to switch (Reachy says hello in the new voice) or **Delete** to remove one.
+
+**Add a voice:** choose a recording (mp3, wav, m4a; 10 to 30 seconds of one person speaking clearly, no music), type a
+name, tick **"The speaker agreed to their voice being used here"**, and press **Make this voice**. It takes a few
+seconds. Only add the voice of someone who said yes: the page refuses without the tick, and the brain keeps a note of
+who the voice is and that it was confirmed.
+
+- **Where it runs.** The voice is made and kept on the brain computer (`~/.cache/reachy_brain/voices`), never on the robot
+  or in the cloud. The recording itself is not kept: only a small voice file (about 18 MB) and its details. Deleting a
+  voice deletes that file. The tab works only while the brain is connected.
+- **One-time setup to make new voices.** The Pocket TTS model that can clone a voice is gated on Hugging Face. On the brain
+  computer: accept the terms at <https://huggingface.co/kyutai/pocket-tts> with your Hugging Face account, then log in
+  with a **read** token in the brain's own Hugging Face folder (the brain start script uses `HF_HOME`). Without that, the
+  tab still lists and switches voices, and says that making new ones is not set up. Voices that are already made need no
+  login to play.
+- **Credit.** Voice cloning uses Kyutai's Pocket TTS (CC BY 4.0).
+- **Limits.** Up to 20 voices, files up to 5 MB, the first 30 seconds of a recording are used. The recording's quality
+  decides how good the voice sounds; I have not measured how long a sample you need for a good result.
 
 ## 360° photos
 

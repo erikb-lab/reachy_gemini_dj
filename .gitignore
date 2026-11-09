@@ -11,3 +11,12 @@ TRANSFER.md
 TRANSFER*.md
 
 .venv-test/
+
+# Recordings and cloned voices stay on the owner's own machines: never commit them
+*.safetensors
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.flac
+voices/
