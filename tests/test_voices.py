@@ -41,8 +41,8 @@ def files(s):
 # ----------------------------------------------------------------------------------------------------- the store
 def test_create_use_and_delete_a_voice(tmp_path):
     s = store(tmp_path)
-    meta = s.create("  Dan\n  Rock ", True, AUDIO, "dan.mp3", fake_clone)
-    assert meta["name"] == "Dan Rock" and meta["consent"]["confirmed"] is True and meta["seconds"] == 12.0
+    meta = s.create("  Alex\n  Lee ", True, AUDIO, "alex.mp3", fake_clone)
+    assert meta["name"] == "Alex Lee" and meta["consent"]["confirmed"] is True and meta["seconds"] == 12.0
     assert [v["id"] for v in s.list()] == [meta["id"]]
     # only the small voice file and its details are kept: not the recording, and no work folder is left behind
     assert files(s) == [f"{meta['id']}.json", f"{meta['id']}.safetensors"]
@@ -60,7 +60,7 @@ def test_create_use_and_delete_a_voice(tmp_path):
 def test_a_voice_is_never_made_without_the_consent_tick(tmp_path, consent):
     s = store(tmp_path)
     with pytest.raises(V.VoiceError, match="agreed"):
-        s.create("Dan", consent, AUDIO, "dan.mp3", fake_clone)
+        s.create("Alex", consent, AUDIO, "alex.mp3", fake_clone)
     assert files(s) == []
 
 
@@ -76,21 +76,21 @@ def test_name_is_cleaned_and_required(tmp_path):
 def test_bad_recordings_are_refused_and_leave_nothing(tmp_path):
     s = store(tmp_path)
     with pytest.raises(V.VoiceError, match="empty"):
-        s.create("Dan", True, b"tiny", "a.mp3", fake_clone)
+        s.create("Alex", True, b"tiny", "a.mp3", fake_clone)
     with pytest.raises(V.VoiceError, match="too big"):
-        s.create("Dan", True, bytes(V.MAX_UPLOAD_BYTES + 1), "a.mp3", fake_clone)
+        s.create("Alex", True, bytes(V.MAX_UPLOAD_BYTES + 1), "a.mp3", fake_clone)
     with pytest.raises(V.VoiceError, match="seconds of sound"):
-        store(tmp_path, seconds=1.0).create("Dan", True, AUDIO, "a.mp3", fake_clone)
+        store(tmp_path, seconds=1.0).create("Alex", True, AUDIO, "a.mp3", fake_clone)
 
     def unreadable(src, dst):
         raise V.VoiceError("I could not read that file as audio.")
     with pytest.raises(V.VoiceError, match="audio"):
-        V.VoiceStore(s.root, convert=unreadable).create("Dan", True, AUDIO, "a.mp3", fake_clone)
+        V.VoiceStore(s.root, convert=unreadable).create("Alex", True, AUDIO, "a.mp3", fake_clone)
 
     def broken_clone(wav, out):
         pass                                                                            # engine wrote nothing
     with pytest.raises(V.VoiceError, match="did not make"):
-        s.create("Dan", True, AUDIO, "a.mp3", broken_clone)
+        s.create("Alex", True, AUDIO, "a.mp3", broken_clone)
     assert files(s) == []
 
 
@@ -114,13 +114,13 @@ def test_an_id_cannot_leave_the_voices_folder(tmp_path, vid):
 
 def test_a_voice_file_copied_in_by_hand_is_listed_without_a_consent_record(tmp_path):
     s = store(tmp_path)
-    (s.root / "dan_voice.safetensors").write_bytes(bytes(2000))
+    (s.root / "old_voice.safetensors").write_bytes(bytes(2000))
     (s.root / "not-a-voice.txt").write_text("x")
     (s.root / "Bad Name.safetensors").write_bytes(bytes(2000))                          # not a safe id: ignored
     [v] = s.list()
-    assert v["id"] == "dan_voice" and v["name"] == "Dan Voice" and v["consent"]["confirmed"] is False
-    s.set_active("dan_voice")
-    assert s.spec() == s.root / "dan_voice.safetensors"
+    assert v["id"] == "old_voice" and v["name"] == "Old Voice" and v["consent"]["confirmed"] is False
+    s.set_active("old_voice")
+    assert s.spec() == s.root / "old_voice.safetensors"
 
 
 def test_audio_upload_decoding():
@@ -173,9 +173,9 @@ def test_brain_voice_requests_end_to_end(tmp_path):
     b = brain(tmp_path)
     r = b.voice_op(req(type="voice_list"))
     assert r == {"type": "voice_result", "rid": "r1", "ok": True, "voices": [], "active": "default", "can_clone": True}
-    r = b.voice_op(req(type="voice_create", name="Dan", consent=True, filename="dan.mp3",
+    r = b.voice_op(req(type="voice_create", name="Alex", consent=True, filename="alex.mp3",
                        audio_b64=base64.b64encode(AUDIO).decode()))
-    assert r["ok"] and r["voice"]["name"] == "Dan" and b.tts.cloned == 1
+    assert r["ok"] and r["voice"]["name"] == "Alex" and b.tts.cloned == 1
     vid = r["voice"]["id"]
     r = b.voice_op(req(type="voice_use", id=vid))
     assert r["ok"] and r["active"] == vid and b.tts.voice == b.voices.path(vid)
@@ -185,10 +185,10 @@ def test_brain_voice_requests_end_to_end(tmp_path):
 
 def test_brain_refuses_cloning_without_the_model_or_consent(tmp_path):
     b = brain(tmp_path, can_clone=False)
-    r = b.voice_op(req(type="voice_create", name="Dan", consent=True, filename="a.mp3", audio_b64=base64.b64encode(AUDIO).decode()))
+    r = b.voice_op(req(type="voice_create", name="Alex", consent=True, filename="a.mp3", audio_b64=base64.b64encode(AUDIO).decode()))
     assert not r["ok"] and "Hugging Face" in r["error"] and b.tts.cloned == 0
     b = brain(tmp_path)
-    r = b.voice_op(req(type="voice_create", name="Dan", consent=False, filename="a.mp3", audio_b64=base64.b64encode(AUDIO).decode()))
+    r = b.voice_op(req(type="voice_create", name="Alex", consent=False, filename="a.mp3", audio_b64=base64.b64encode(AUDIO).decode()))
     assert not r["ok"] and "agreed" in r["error"] and b.tts.cloned == 0
 
 
@@ -198,7 +198,7 @@ def test_brain_voice_errors_never_raise(tmp_path):
     assert not b.voice_op(req(type="voice_use", id="../etc"))["ok"]
     assert not b.voice_op(req(type="voice_delete", id="nope"))["ok"]
     assert not b.voice_op(req(type="voice_dance"))["ok"]
-    assert not b.voice_op(req(type="voice_create", name="Dan", consent=True, audio_b64="***"))["ok"]
+    assert not b.voice_op(req(type="voice_create", name="Alex", consent=True, audio_b64="***"))["ok"]
     b.voices = None                                                                       # still starting up
     assert "starting" in b.voice_op(req(type="voice_list"))["error"]
 

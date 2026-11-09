@@ -160,7 +160,7 @@
 
     card.appendChild(h('h3', { text: 'Add a voice' }));
     els.file = h('input', { type: 'file', id: 'vc-file', accept: 'audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac', onchange: updateForm });
-    els.name = h('input', { type: 'text', id: 'vc-name', maxlength: '40', placeholder: 'Name, for example "Dan"', autocomplete: 'off', oninput: updateForm });
+    els.name = h('input', { type: 'text', id: 'vc-name', maxlength: '40', placeholder: 'Name, for example "Alex"', autocomplete: 'off', oninput: updateForm });
     els.consent = h('input', { type: 'checkbox', id: 'vc-consent', onchange: updateForm });
     els.make = h('button', { type: 'button', class: 'pn-btn primary', text: 'Make this voice', onclick: make });
     els.make.disabled = true;
