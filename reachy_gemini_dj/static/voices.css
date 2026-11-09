@@ -1,0 +1,23 @@
+/* Styles for the Voices tab (voices.js). Uses the shared --p-* variables from settings.css. */
+#rp-voices [hidden] { display: none !important; }
+#rp-voices .vc-count { display: inline-block; margin-left: 4px; padding: 0 8px; border-radius: 999px; background: var(--soft, var(--p-border)); color: var(--p-accent); font-size: 12px; }
+#rp-voices .vc-count:empty { display: none; }
+#rp-voices .vc-note { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; font-size: 14px; border: 1px solid var(--p-border); background: var(--soft, transparent); }
+#rp-voices .vc-list { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 10px; }
+#rp-voices .vc-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; padding: 12px 14px; border: 1px solid var(--p-border); border-radius: 12px; }
+#rp-voices .vc-item.on { border-color: var(--p-accent); box-shadow: 0 0 0 1px var(--p-accent) inset; }
+#rp-voices .vc-info { min-width: 0; flex: 1 1 220px; }
+#rp-voices .vc-name { font-weight: 700; font-size: 15px; overflow-wrap: anywhere; }
+#rp-voices .vc-badge { margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; background: var(--p-accent); color: var(--p-accent-ink, white); }
+#rp-voices .vc-meta { margin-top: 2px; }
+#rp-voices .vc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+#rp-voices .vc-form { display: grid; gap: 8px; }
+#rp-voices .vc-form > label { font-size: 13.5px; font-weight: 600; }
+#rp-voices .vc-form input[type=text], #rp-voices .vc-form input[type=file] { width: 100%; max-width: 480px; }
+#rp-voices .vc-consent { display: flex; align-items: flex-start; gap: 10px; margin-top: 4px; font-weight: 400 !important; }
+#rp-voices .vc-consent input { margin-top: 4px; width: 18px; height: 18px; flex: none; }
+#rp-voices .vc-consent b { font-weight: 700; }
+@media (max-width: 759.98px) {
+  #rp-voices .vc-actions { width: 100%; }
+  #rp-voices .vc-actions .pn-btn { flex: 1 1 auto; }
+}

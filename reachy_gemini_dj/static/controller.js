@@ -28,7 +28,7 @@ const post = (path, body, ok) => api(path, body).then(r => { if (ok) toast(ok); 
 const fmt = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
 /* ---------- tabs ---------- */
-const tabs = ['dj', 'robot', 'settings'];
+const tabs = ['dj', 'robot', 'voices', 'settings'];
 function showTab(name, focus) {
   tabs.forEach(t => {
     const b = $('tab-' + t), on = t === name;
@@ -40,8 +40,8 @@ function showTab(name, focus) {
 tabs.forEach(t => $('tab-' + t).addEventListener('click', () => showTab(t)));
 $('tabs').addEventListener('keydown', e => {
   const i = tabs.findIndex(t => $('tab-' + t).getAttribute('aria-selected') === 'true');
-  if (e.key === 'ArrowRight') showTab(tabs[(i + 1) % 3], true);
-  else if (e.key === 'ArrowLeft') showTab(tabs[(i + 2) % 3], true);
+  if (e.key === 'ArrowRight') showTab(tabs[(i + 1) % tabs.length], true);
+  else if (e.key === 'ArrowLeft') showTab(tabs[(i + tabs.length - 1) % tabs.length], true);
 });
 try { const t = localStorage.getItem('reachy_tab'); if (tabs.includes(t)) showTab(t); } catch (e) {}
 

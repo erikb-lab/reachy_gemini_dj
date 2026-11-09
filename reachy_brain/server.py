@@ -22,6 +22,7 @@ from .llm import LlamaServer
 from .session import BrainSession
 from .stt import STT
 from .tts import make_tts
+from .voices import VoiceError, VoiceStore, decode_audio
 
 log = logging.getLogger("reachy_brain")
 
@@ -31,6 +32,7 @@ class Brain:
         self.cfg = cfg
         self.llm = llm or LlamaServer(cfg)
         self.stt, self.tts = stt, tts
+        self.voices: VoiceStore | None = None
         self.active: BrainSession | None = None
         self._lock = threading.Lock()
 
@@ -40,7 +42,60 @@ class Brain:
             self.llm.start()
         self.stt = self.stt or STT(self.cfg.stt_model, self.cfg.stt_threads)
         self.tts = self.tts or make_tts(self.cfg.tts_engine, self.cfg.tts_voice, self.cfg.tts_threads)
+        self.voices = self.voices or VoiceStore(self.cfg.voices_dir)
+        try:                                   # speak in the voice that was chosen last time
+            spec = self.voices.spec()
+            if spec is not None:
+                self.tts.set_voice(spec)
+                log.info("voice: %s", self.voices.active())
+        except Exception:
+            log.exception("could not load the chosen voice; using the default one")
         log.info("brain ready on ws://%s:%d", self.cfg.host, self.cfg.port)
+
+    # ---------- voices (the control page's Voices tab) ----------
+    def voice_op(self, m: dict) -> dict:
+        """Run one voice request from the robot app and return the reply message. Never raises."""
+        t, rid = m.get("type"), m.get("rid")
+        ok = lambda **kw: {"type": "voice_result", "rid": rid, "ok": True, **kw}
+        bad = lambda msg: {"type": "voice_result", "rid": rid, "ok": False, "error": msg}
+        try:
+            v = self.voices
+            if v is None or self.tts is None:
+                return bad("The brain is still starting. Try again in a moment.")
+            if t == "voice_list":
+                return ok(voices=v.list(), active=v.active(), can_clone=bool(getattr(self.tts, "can_clone", False)))
+            if t == "voice_create":
+                if not getattr(self.tts, "can_clone", False):
+                    return bad("Voice cloning is not set up on the brain. The Kyutai voice model needs its terms accepted "
+                               "on Hugging Face and a read login on the brain computer; see the README.")
+                meta = v.create(m.get("name"), m.get("consent"), decode_audio(m.get("audio_b64")), m.get("filename"),
+                                self.tts.clone)
+                return ok(voice=meta, voices=v.list(), active=v.active())
+            if t == "voice_use":
+                vid = str(m.get("id") or "")
+                v.set_active(vid)
+                self.tts.set_voice(v.spec(vid))
+                return ok(active=v.active(), voices=v.list())
+            if t == "voice_delete":
+                vid = str(m.get("id") or "")
+                was_active = v.active() == vid
+                if not v.delete(vid):
+                    return bad("That voice is not on the brain any more.")
+                if was_active:
+                    self.tts.set_voice(None)
+                return ok(voices=v.list(), active=v.active())
+            return bad("Unknown voice request.")
+        except VoiceError as e:
+            return bad(str(e))
+        except Exception as e:
+            log.exception("voice request failed")
+            return bad(f"The voice request failed on the brain ({type(e).__name__}).")
+
+    async def _voice_task(self, m: dict, send, sess) -> None:
+        res = await asyncio.to_thread(self.voice_op, m)
+        send(json.dumps(res))
+        if res.get("ok") and m.get("type") == "voice_use" and m.get("preview", True):
+            sess.on_say({"text": "Hello. This is how I sound now."})
 
     async def handler(self, ws) -> None:
         loop = asyncio.get_running_loop()
@@ -78,6 +133,8 @@ class Brain:
                     sess.on_frame(m)
                 elif t == "say":
                     sess.on_say(m)
+                elif isinstance(t, str) and t.startswith("voice_"):
+                    asyncio.create_task(self._voice_task(m, _send, sess))
                 elif t == "barge_in":
                     sess.barge_in()
                 elif t == "new_conversation":

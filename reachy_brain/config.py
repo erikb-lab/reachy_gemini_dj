@@ -33,6 +33,7 @@ class BrainConfig:
     tts_engine: str = "pocket"
     tts_voice: str = "alba"
     tts_threads: int = 3
+    voices_dir: str = "~/.cache/reachy_brain/voices"   # cloned voices (a small file each) and who agreed to them
     # Turn taking
     vad_aggressiveness: int = 2
     end_silence_ms: int = 650
@@ -64,6 +65,8 @@ class BrainConfig:
         p.add_argument("--slot-cache-dir", dest="slot_cache_dir", default=_env("BRAIN_SLOT_CACHE_DIR", d.slot_cache_dir),
                        help="where llama-server saves warmed prompt caches (on disk, not /tmp)")
         p.add_argument("--tts-voice", default=_env("BRAIN_TTS_VOICE", d.tts_voice))
+        p.add_argument("--voices-dir", dest="voices_dir", default=_env("BRAIN_VOICES_DIR", d.voices_dir),
+                       help="where cloned voices are kept (on disk, not /tmp)")
         p.add_argument("--gemini-key", dest="gemini_api_key",
                        default=_env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"))
         a = p.parse_args(argv)

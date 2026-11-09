@@ -123,6 +123,16 @@ class QuietRequest(BaseModel):
     minutes: int = 30
 
 
+class VoiceCreate(BaseModel):
+    name: str
+    consent: bool = False              # the person using the page confirms the speaker agreed; the brain refuses without it
+    filename: str = ""
+    audio_b64: str = ""                # the recording, base64 (read in the browser; there is no file-upload dependency)
+
+
+MAX_VOICE_UPLOAD_B64 = 7_000_000       # ~5 MB of audio; the brain link carries at most 8 MB per message
+
+
 class TimerCancel(BaseModel):
     id: int
 
@@ -711,6 +721,49 @@ class ReachyGeminiDJ(ReachyMiniApp):
         @app.delete("/api/panorama/{pid}")
         def panorama_delete(pid: str):
             return {"ok": self.panorama.delete(pid)}
+
+        # Voices tab: the local voice brain makes a voice from a recording of someone who agreed, keeps a list, and
+        # switches between them. All of it happens on the brain computer; the robot only relays the requests.
+        voice_id = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+        def voice_call(msg: dict, timeout: float = 120.0) -> dict:
+            return self.local_session.voice_call(msg, timeout)
+
+        @app.get("/api/voices")
+        def voices_list():
+            res = voice_call({"type": "voice_list"}, 15.0)
+            res["connected"] = bool(self.local_session.connected)
+            return res
+
+        @app.post("/api/voices")
+        def voices_create(req: VoiceCreate):
+            if not req.consent:
+                return {"ok": False, "error": "Tick the box to confirm the speaker agreed to their voice being used here."}
+            if len(req.audio_b64) > MAX_VOICE_UPLOAD_B64:
+                return {"ok": False, "error": "That file is too big. A 30 second clip is plenty (5 MB at most)."}
+            res = voice_call({"type": "voice_create", "name": req.name[:80], "consent": True,
+                              "filename": req.filename[:120], "audio_b64": req.audio_b64})
+            if res.get("ok"):
+                self.record_event("voice", f"New voice added: {req.name[:40]}")
+            return res
+
+        @app.post("/api/voices/{vid}/use")
+        def voices_use(vid: str):
+            if not voice_id.match(vid):
+                return {"ok": False, "error": "Unknown voice."}
+            res = voice_call({"type": "voice_use", "id": vid}, 60.0)
+            if res.get("ok"):
+                self.record_event("voice", "Voice changed")
+            return res
+
+        @app.delete("/api/voices/{vid}")
+        def voices_delete(vid: str):
+            if not voice_id.match(vid):
+                return {"ok": False, "error": "Unknown voice."}
+            res = voice_call({"type": "voice_delete", "id": vid}, 30.0)
+            if res.get("ok"):
+                self.record_event("voice", "Voice deleted")
+            return res
 
         @app.post("/api/poses/save")
         def save_pose(req: PoseName):
